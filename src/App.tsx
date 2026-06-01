@@ -326,7 +326,7 @@ function ClassesView({ classes, students, attendance, showToast }) {
   const [editingClass, setEditingClass] = useState(null);
   const [newClass, setNewClass] = useState({ name: '', session: 'Sáng', classCode: '' });
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
-  const [studentToAdd, setStudentToAdd] = useState('');
+  const [studentsToAdd, setStudentsToAdd] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortByAttendance, setSortByAttendance] = useState(false);
   
@@ -378,18 +378,28 @@ function ClassesView({ classes, students, attendance, showToast }) {
     }
   };
 
-  const handleAddStudentToClass = async () => {
-    if (!studentToAdd) return;
+  const handleAddStudentsToClass = async () => {
+    if (studentsToAdd.length === 0) return;
     try {
-       const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', studentToAdd);
-       await updateDoc(studentRef, {
-          classId: selectedClass.id, systemClassName: selectedClass.name
+       const updatePromises = studentsToAdd.map(id => {
+          const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', id);
+          return updateDoc(studentRef, {
+             classId: selectedClass.id, systemClassName: selectedClass.name
+          });
        });
+       await Promise.all(updatePromises);
+       
        setShowAddStudentModal(false);
-       setStudentToAdd('');
+       setStudentsToAdd([]);
        setSearchQuery('');
-       showToast('Đã thêm học sinh vào lớp!');
+       showToast(`Đã thêm ${studentsToAdd.length} học sinh vào lớp!`);
     } catch (e) { showToast('Lỗi khi thêm học sinh', 'error'); }
+  };
+
+  const toggleStudentSelection = (id) => {
+     setStudentsToAdd(prev => 
+        prev.includes(id) ? prev.filter(sId => sId !== id) : [...prev, id]
+     );
   };
 
   const handleRemoveStudentFromClass = async (studentId, studentName) => {
@@ -409,11 +419,16 @@ function ClassesView({ classes, students, attendance, showToast }) {
     const rate = total === 0 ? 0 : Math.round((present / total) * 100);
 
     const availableStudents = students.filter(s => s.classId !== selectedClass.id);
-    const filteredAvailableStudents = availableStudents.filter(s => {
+    let filteredAvailableStudents = availableStudents.filter(s => {
        if (!searchQuery) return true;
        const lowerQuery = searchQuery.toLowerCase();
        return (s.fullName?.toLowerCase().includes(lowerQuery) || s.studentCode?.toLowerCase().includes(lowerQuery));
     });
+
+    // Tối ưu: Nếu không tìm kiếm, chỉ hiện 15 học viên mới nhất
+    if (!searchQuery) {
+        filteredAvailableStudents = filteredAvailableStudents.slice(0, 15);
+    }
 
     const displayClassStudents = [...classStudents].sort((a, b) => {
       if (sortByAttendance) {
@@ -526,25 +541,38 @@ function ClassesView({ classes, students, attendance, showToast }) {
                           <div className="p-4 text-center text-gray-500 text-xs">Không tìm thấy.</div>
                        ) : (
                           <ul className="divide-y divide-gray-50">
-                             {filteredAvailableStudents.map(s => (
-                                <li 
-                                   key={s.id} onClick={() => setStudentToAdd(s.id === studentToAdd ? '' : s.id)}
-                                   className={`p-3 text-sm cursor-pointer flex justify-between ${studentToAdd === s.id ? 'bg-indigo-50' : ''}`}
-                                >
-                                   <div>
-                                      <div className="font-medium text-gray-800">{s.fullName}</div>
-                                      <div className="text-[10px] text-gray-500">{s.studentCode} {s.systemClassName ? `(${s.systemClassName})` : ''}</div>
-                                   </div>
-                                   {studentToAdd === s.id && <CheckCircle size={16} className="text-indigo-600 shrink-0" />}
-                                </li>
-                             ))}
+                             {filteredAvailableStudents.map(s => {
+                                const isSelected = studentsToAdd.includes(s.id);
+                                return (
+                                   <li 
+                                      key={s.id} onClick={() => toggleStudentSelection(s.id)}
+                                      className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+                                   >
+                                      <div>
+                                         <div className="font-medium text-gray-800">{s.fullName}</div>
+                                         <div className="text-[10px] text-gray-500">{s.studentCode} {s.systemClassName ? `(${s.systemClassName})` : ''}</div>
+                                      </div>
+                                      <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'}`}>
+                                         {isSelected && <CheckCircle size={14} className="text-white" />}
+                                      </div>
+                                   </li>
+                                )
+                             })}
                           </ul>
+                       )}
+                       {!searchQuery && availableStudents.length > 15 && (
+                          <div className="p-2 text-center text-[10px] text-gray-400 bg-gray-50">
+                             Nhập tên/mã để tìm thêm...
+                          </div>
                        )}
                     </div>
                  </div>
-                 <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 shrink-0">
-                    <button onClick={() => { setShowAddStudentModal(false); setStudentToAdd(''); }} className="px-4 py-2 text-sm bg-white border rounded-lg font-medium">Hủy</button>
-                    <button onClick={handleAddStudentToClass} disabled={!studentToAdd} className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg font-medium disabled:opacity-50">Thêm</button>
+                 <div className="p-4 border-t bg-gray-50 flex justify-between items-center shrink-0">
+                    <div className="text-xs text-indigo-600 font-bold">Đã chọn: {studentsToAdd.length}</div>
+                    <div className="flex gap-2">
+                       <button onClick={() => { setShowAddStudentModal(false); setStudentsToAdd([]); }} className="px-4 py-2 text-sm bg-white border rounded-lg font-medium">Hủy</button>
+                       <button onClick={handleAddStudentsToClass} disabled={studentsToAdd.length === 0} className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg font-medium disabled:opacity-50">Thêm {studentsToAdd.length > 0 ? `(${studentsToAdd.length})` : ''}</button>
+                    </div>
                  </div>
               </div>
            </div>
