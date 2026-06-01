@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, where } from 'firebase/firestore';
-import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut } from 'lucide-react';
+import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp } from 'lucide-react';
 
 // ==========================================
 // CẤU HÌNH FIREBASE THEO CHUẨN MÔI TRƯỜNG
@@ -328,6 +328,10 @@ function ClassesView({ classes, students, attendance, showToast }) {
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [studentToAdd, setStudentToAdd] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortByAttendance, setSortByAttendance] = useState(false);
+  
+  // State quản lý số lượng hiển thị (Phân trang UI)
+  const [visibleCount, setVisibleCount] = useState(15); 
 
   const handleAddClass = async (e) => {
     e.preventDefault();
@@ -411,10 +415,20 @@ function ClassesView({ classes, students, attendance, showToast }) {
        return (s.fullName?.toLowerCase().includes(lowerQuery) || s.studentCode?.toLowerCase().includes(lowerQuery));
     });
 
+    const displayClassStudents = [...classStudents].sort((a, b) => {
+      if (sortByAttendance) {
+        return (b.totalAttendance || 0) - (a.totalAttendance || 0); 
+      }
+      return 0; 
+    });
+
+    // Cắt mảng dữ liệu để phân trang hiển thị (Tối ưu DOM / RAM điện thoại)
+    const paginatedStudents = displayClassStudents.slice(0, visibleCount);
+
     return (
       <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
         <div className="flex items-center gap-3">
-           <button onClick={() => setSelectedClass(null)} className="p-2 bg-white rounded-lg border shadow-sm">
+           <button onClick={() => { setSelectedClass(null); setVisibleCount(15); }} className="p-2 bg-white rounded-lg border shadow-sm">
               <ChevronLeft size={20} />
            </button>
            <div>
@@ -428,31 +442,42 @@ function ClassesView({ classes, students, attendance, showToast }) {
           <div className="bg-white p-3 rounded-xl shadow-sm border border-indigo-100 flex items-center justify-between"><span className="text-xs text-gray-500">Tỉ lệ</span><span className="text-xl font-bold text-indigo-600">{rate}%</span></div>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-           <div className="p-3 border-b flex justify-between items-center bg-gray-50/50">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+           <div className="p-3 border-b flex justify-between items-center bg-gray-50/50 shrink-0">
               <h3 className="font-bold text-sm">Học sinh ({total})</h3>
-              <button onClick={() => setShowAddStudentModal(true)} className="bg-indigo-600 text-white p-1.5 rounded-lg text-xs font-medium flex items-center gap-1">
-                 <UserPlus size={14}/> Thêm
-              </button>
+              <div className="flex gap-2">
+                 <button onClick={() => setSortByAttendance(!sortByAttendance)} className={`p-1.5 rounded-lg text-xs font-medium flex items-center transition-colors ${sortByAttendance ? 'bg-indigo-100 text-indigo-700' : 'bg-white border text-gray-600 hover:bg-gray-50'}`} title="Sắp xếp theo số buổi đã học">
+                    <ArrowDownUp size={14}/>
+                 </button>
+                 <button onClick={() => setShowAddStudentModal(true)} className="bg-indigo-600 text-white p-1.5 rounded-lg text-xs font-medium flex items-center gap-1">
+                    <UserPlus size={14}/> Thêm
+                 </button>
+              </div>
            </div>
-           <div className="divide-y divide-gray-100 max-h-[60vh] overflow-y-auto">
-              {classStudents.length === 0 ? (
+           <div className="divide-y divide-gray-100 flex-1 overflow-y-auto max-h-[50vh]">
+              {paginatedStudents.length === 0 ? (
                  <div className="p-6 text-center text-gray-400 text-sm">Lớp chưa có học sinh nào.</div>
               ) : (
-                 classStudents.map(student => {
+                 paginatedStudents.map(student => {
                     const isPresent = attendance.some(log => log.studentId === student.id);
                     return (
                        <div key={student.id} className="p-3 flex items-center justify-between">
-                          <div className="flex items-center gap-3 overflow-hidden">
-                             <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex justify-center items-center font-bold text-sm shrink-0">
+                          <div className="flex items-center gap-3 overflow-hidden flex-1">
+                             <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex justify-center items-center font-bold text-sm shrink-0 border">
                                 {student.avatar ? <img src={student.avatar} className="w-full h-full rounded-full object-cover"/> : student.fullName.charAt(0)}
                              </div>
                              <div className="text-left truncate">
                                 <div className="font-medium text-sm text-gray-900 truncate">{student.fullName}</div>
-                                <div className="text-xs text-gray-500">{student.studentCode}</div>
+                                <div className="text-[10px] text-gray-500">{student.studentCode}</div>
                              </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
+                          
+                          <div className="flex flex-col items-center justify-center px-4 shrink-0 border-r border-l border-gray-50">
+                             <span className="text-[10px] text-gray-500 font-medium">Số buổi đã học</span>
+                             <span className="text-sm font-bold text-indigo-600">{student.totalAttendance || 0}</span>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 pl-2">
                              {isPresent ? 
                                 <span className="text-emerald-600 bg-emerald-50 px-2 py-1 rounded text-[10px] font-bold inline-flex items-center gap-1"><CheckCircle size={10}/> Có mặt</span> : 
                                 <span className="text-rose-500 bg-rose-50 px-2 py-1 rounded text-[10px] font-bold inline-flex items-center gap-1"><XCircle size={10}/> Vắng</span>
@@ -464,6 +489,18 @@ function ClassesView({ classes, students, attendance, showToast }) {
                        </div>
                     )
                  })
+              )}
+              
+              {/* Nút Xem thêm (Load More) */}
+              {visibleCount < displayClassStudents.length && (
+                 <div className="p-3 bg-gray-50/50 flex justify-center">
+                    <button 
+                       onClick={() => setVisibleCount(prev => prev + 15)} 
+                       className="px-4 py-1.5 bg-white border border-gray-200 text-indigo-600 text-xs font-bold rounded-full shadow-sm hover:bg-indigo-50 transition-colors"
+                    >
+                       Xem thêm {displayClassStudents.length - visibleCount} học sinh...
+                    </button>
+                 </div>
               )}
            </div>
         </div>
@@ -551,7 +588,7 @@ function ClassesView({ classes, students, attendance, showToast }) {
              classes.map(cls => {
                 const count = students.filter(s => s.classId === cls.id).length;
                 return (
-                   <div key={cls.id} className="bg-white border rounded-xl p-4 flex flex-col shadow-sm cursor-pointer" onClick={() => setSelectedClass(cls)}>
+                   <div key={cls.id} className="bg-white border rounded-xl p-4 flex flex-col shadow-sm cursor-pointer" onClick={() => { setSelectedClass(cls); setVisibleCount(15); }}>
                       <div className="flex justify-between items-start mb-2">
                          <div className="flex items-center gap-3">
                             <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><BookOpen size={20} /></div>
@@ -588,6 +625,9 @@ function StudentsView({ students, showToast }) {
   const printRef = useRef(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  
+  // State quản lý phân trang giao diện
+  const [visibleCount, setVisibleCount] = useState(15);
 
   useEffect(() => {
     if (!window.XLSX) {
@@ -647,7 +687,7 @@ function StudentsView({ students, showToast }) {
     const qrToken = `QR_${finalStudentCode}_${Date.now()}`;
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
-        ...newStudent, studentCode: finalStudentCode, qrToken, createdAt: Date.now()
+        ...newStudent, studentCode: finalStudentCode, qrToken, createdAt: Date.now(), totalAttendance: 0 // Khởi tạo số buổi = 0
       });
       setNewStudent({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '' });
       setIsAdding(false);
@@ -679,7 +719,7 @@ function StudentsView({ students, showToast }) {
             fullName, studentCode,
             className: row['Lớp'] || '', school: row['Trường'] || '',
             parentPhone: phone, swimmingPool: pool,
-            qrToken: `QR_${studentCode}_${Date.now()}`, createdAt: Date.now()
+            qrToken: `QR_${studentCode}_${Date.now()}`, createdAt: Date.now(), totalAttendance: 0 // Khởi tạo số buổi = 0
           });
         }
         showToast('Import thành công!');
@@ -769,30 +809,44 @@ function StudentsView({ students, showToast }) {
          {students.length === 0 ? (
             <div className="text-center p-6 text-gray-400 text-sm bg-white rounded-xl">Chưa có học sinh.</div>
          ) : (
-            students.map(student => (
-               <div key={student.id} className="bg-white p-3 rounded-xl shadow-sm border flex items-center justify-between">
-                  <div className="flex items-center gap-3 overflow-hidden">
-                     <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-700 flex justify-center items-center font-bold text-sm shrink-0 border">
-                        {student.avatar ? <img src={student.avatar} className="w-full h-full rounded-full object-cover"/> : student.fullName.charAt(0)}
-                     </div>
-                     <div className="truncate text-left">
-                        <h4 className="font-bold text-gray-900 text-sm truncate">{student.fullName}</h4>
-                        <div className="flex items-center justify-start gap-1 mt-0.5">
-                           <span className="text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{student.studentCode}</span>
-                           {student.className && <span className="bg-blue-50 text-blue-600 px-1 py-0.5 rounded text-[9px] font-bold">{student.className}</span>}
+            <>
+               {students.slice(0, visibleCount).map(student => (
+                  <div key={student.id} className="bg-white p-3 rounded-xl shadow-sm border flex items-center justify-between">
+                     <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-700 flex justify-center items-center font-bold text-sm shrink-0 border">
+                           {student.avatar ? <img src={student.avatar} className="w-full h-full rounded-full object-cover"/> : student.fullName.charAt(0)}
+                        </div>
+                        <div className="truncate text-left">
+                           <h4 className="font-bold text-gray-900 text-sm truncate">{student.fullName}</h4>
+                           <div className="flex items-center justify-start gap-1 mt-0.5">
+                              <span className="text-[9px] text-gray-500 bg-gray-100 px-1 py-0.5 rounded">{student.studentCode}</span>
+                              {student.className && <span className="bg-blue-50 text-blue-600 px-1 py-0.5 rounded text-[9px] font-bold">{student.className}</span>}
+                           </div>
                         </div>
                      </div>
+                     
+                     {/* Nút thao tác dọc */}
+                     <div className="flex gap-1 shrink-0">
+                        <button onClick={() => setStudentDetails(student)} className="p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Xem chi tiết"><Eye size={16}/></button>
+                        <button onClick={() => setSelectedCard(student)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors" title="Mã QR"><QrCode size={16}/></button>
+                        <button onClick={() => {setEditingStudent(student); window.scrollTo({top:0});}} className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors" title="Sửa"><Edit2 size={16}/></button>
+                        <button onClick={() => handleDelete(student.id)} className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors" title="Xóa"><Trash2 size={16}/></button>
+                     </div>
                   </div>
-                  
-                  {/* Nút thao tác dọc */}
-                  <div className="flex gap-1 shrink-0">
-                     <button onClick={() => setStudentDetails(student)} className="p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Xem chi tiết"><Eye size={16}/></button>
-                     <button onClick={() => setSelectedCard(student)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors" title="Mã QR"><QrCode size={16}/></button>
-                     <button onClick={() => {setEditingStudent(student); window.scrollTo({top:0});}} className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors" title="Sửa"><Edit2 size={16}/></button>
-                     <button onClick={() => handleDelete(student.id)} className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors" title="Xóa"><Trash2 size={16}/></button>
+               ))}
+
+               {/* Nút Xem thêm */}
+               {visibleCount < students.length && (
+                  <div className="pt-2 pb-4 flex justify-center">
+                     <button 
+                        onClick={() => setVisibleCount(prev => prev + 15)} 
+                        className="px-4 py-2 bg-white border border-gray-200 text-indigo-600 text-xs font-bold rounded-full shadow-sm hover:bg-indigo-50 transition-colors"
+                     >
+                        Xem thêm {students.length - visibleCount} học sinh...
+                     </button>
                   </div>
-               </div>
-            ))
+               )}
+            </>
          )}
       </div>
 
@@ -944,9 +998,18 @@ function ScannerView({ students, attendance, user, showToast }) {
       setLastScan({ ...student, status: 'warning', time: new Date().toLocaleTimeString('vi-VN') });
     } else {
       try {
+        // Ghi log điểm danh
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), {
           studentId: student.id, timestamp: Date.now(), dateString: todayString, scannedBy: user.uid, status: 'present'
         });
+        
+        // Tăng tổng số buổi đã học lên 1
+        const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', student.id);
+        const currentTotal = student.totalAttendance || 0;
+        await updateDoc(studentRef, {
+           totalAttendance: currentTotal + 1
+        });
+
         showToast(`Điểm danh: ${student.fullName}`);
         setLastScan({ ...student, status: 'success', time: new Date().toLocaleTimeString('vi-VN') });
         
