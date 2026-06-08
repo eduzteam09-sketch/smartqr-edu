@@ -699,7 +699,7 @@ function StudentsView({ students, showToast }) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [studentDetails, setStudentDetails] = useState(null);
-  const [newStudent, setNewStudent] = useState({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '' });
+  const [newStudent, setNewStudent] = useState({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '', admissionDate: '' });
   const [selectedCard, setSelectedCard] = useState(null);
   const [searchQuery, setSearchQuery] = useState(''); // State tìm kiếm học sinh
   const fileInputRef = useRef(null);
@@ -708,6 +708,21 @@ function StudentsView({ students, showToast }) {
   const [isExporting, setIsExporting] = useState(false);
   
   const [visibleCount, setVisibleCount] = useState(15);
+  const [studentToDelete, setStudentToDelete] = useState(null); // State quản lý modal xác nhận xóa
+
+  // Thêm useEffect để tự động tải thư viện Excel và PDF khi mở trang
+  useEffect(() => {
+    if (!window.XLSX) {
+      const scriptXlsx = document.createElement('script');
+      scriptXlsx.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      document.body.appendChild(scriptXlsx);
+    }
+    if (!window.html2pdf) {
+      const scriptPdf = document.createElement('script');
+      scriptPdf.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+      document.body.appendChild(scriptPdf);
+    }
+  }, []);
   
   const handleExportPDF = () => {
     if (!window.html2pdf) { showToast('Đang tải công cụ xuất PDF...', 'error'); return; }
@@ -768,7 +783,7 @@ function StudentsView({ students, showToast }) {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
         ...newStudent, studentCode: finalStudentCode, qrToken, createdAt: Date.now(), totalAttendance: 0 // Khởi tạo số buổi = 0
       });
-      setNewStudent({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '' });
+      setNewStudent({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '', admissionDate: '' });
       setIsAdding(false);
       showToast('Thêm học sinh thành công!');
     } catch (error) { showToast('Lỗi khi thêm', 'error'); }
@@ -776,7 +791,11 @@ function StudentsView({ students, showToast }) {
 
   const handleImportExcel = (e) => {
     const file = e.target.files[0];
-    if (!file || !window.XLSX) return;
+    if (!file) return;
+    if (!window.XLSX) {
+        showToast('Đang tải công cụ đọc Excel, vui lòng chờ vài giây rồi thử lại!', 'error');
+        return;
+    }
     setIsImporting(true);
     const reader = new FileReader();
     reader.onload = async (evt) => {
@@ -793,11 +812,25 @@ function StudentsView({ students, showToast }) {
              if (phone.length === 9 && !phone.startsWith('0')) phone = '0' + phone;
           }
           const pool = row['Điểm hồ bơi'] || row['Học bơi điểm hồ nào?'] || row['Hồ bơi'] || row['Điểm bơi'] || '';
+          const admissionDateRaw = row['Ngày nhập học'] || row['Ngày vào học'] || '';
+          
+          // Chuyển đổi ngày từ Excel (nếu có)
+          let admissionDate = '';
+          if (admissionDateRaw) {
+             if (typeof admissionDateRaw === 'number') {
+                const date = new Date(Math.round((admissionDateRaw - 25569) * 86400 * 1000));
+                admissionDate = date.toISOString().split('T')[0];
+             } else {
+                const parts = String(admissionDateRaw).split('/');
+                if(parts.length === 3) admissionDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+                else admissionDate = String(admissionDateRaw);
+             }
+          }
 
           await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
             fullName, studentCode,
             className: row['Lớp'] || '', school: row['Trường'] || '',
-            parentPhone: phone, swimmingPool: pool,
+            parentPhone: phone, swimmingPool: pool, admissionDate: admissionDate,
             qrToken: `QR_${studentCode}_${Date.now()}`, createdAt: Date.now(), totalAttendance: 0 // Khởi tạo số buổi = 0
           });
         }
@@ -808,10 +841,15 @@ function StudentsView({ students, showToast }) {
     reader.readAsBinaryString(file);
   };
 
-  const handleDelete = async (id) => {
-    if(window.confirm('Xóa học sinh này?')) {
-      try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', id)); } 
-      catch (e) { showToast('Lỗi xóa', 'error'); }
+  const executeDelete = async () => {
+    if (!studentToDelete) return;
+    try { 
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', studentToDelete.id)); 
+      showToast('Đã xóa học sinh thành công!');
+    } 
+    catch (e) { showToast('Lỗi xóa', 'error'); }
+    finally {
+      setStudentToDelete(null); // Đóng modal
     }
   };
 
@@ -884,13 +922,19 @@ function StudentsView({ students, showToast }) {
              </div>
           </div>
 
-          <div>
-             <label className="block text-[10px] font-bold text-gray-500 mb-1">ĐIỂM HỒ BƠI</label>
-             <select value={editingStudent ? editingStudent.swimmingPool : newStudent.swimmingPool} onChange={e => editingStudent ? setEditingStudent({...editingStudent, swimmingPool: e.target.value}) : setNewStudent({...newStudent, swimmingPool: e.target.value})} className="w-full border rounded-lg p-2 text-sm bg-white outline-none">
-                 <option value="">-- Chọn điểm bơi --</option>
-                 <option value="Hồ bơi Tiểu học Võ Trường Toản">Hồ bơi Tiểu học Võ Trường Toản</option>
-                 <option value="Hồ bơi Tiểu học An Bình">Hồ bơi Tiểu học An Bình</option>
-             </select>
+          <div className="grid grid-cols-2 gap-2">
+             <div>
+                 <label className="block text-[10px] font-bold text-gray-500 mb-1">ĐIỂM HỒ BƠI</label>
+                 <select value={editingStudent ? editingStudent.swimmingPool : newStudent.swimmingPool} onChange={e => editingStudent ? setEditingStudent({...editingStudent, swimmingPool: e.target.value}) : setNewStudent({...newStudent, swimmingPool: e.target.value})} className="w-full border rounded-lg p-2 text-sm bg-white outline-none">
+                     <option value="">-- Chọn điểm bơi --</option>
+                     <option value="Hồ bơi Tiểu học Võ Trường Toản">Hồ bơi Tiểu học Võ Trường Toản</option>
+                     <option value="Hồ bơi Tiểu học An Bình">Hồ bơi Tiểu học An Bình</option>
+                 </select>
+             </div>
+             <div>
+                 <label className="block text-[10px] font-bold text-gray-500 mb-1">NGÀY NHẬP HỌC</label>
+                 <input type="date" value={editingStudent ? editingStudent.admissionDate || '' : newStudent.admissionDate} onChange={e => editingStudent ? setEditingStudent({...editingStudent, admissionDate: e.target.value}) : setNewStudent({...newStudent, admissionDate: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 bg-white" />
+             </div>
           </div>
           
           <div className="flex gap-2 pt-2">
@@ -926,7 +970,7 @@ function StudentsView({ students, showToast }) {
                         <button onClick={() => setStudentDetails(student)} className="p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors" title="Xem chi tiết"><Eye size={16}/></button>
                         <button onClick={() => setSelectedCard(student)} className="p-2 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors" title="Mã QR"><QrCode size={16}/></button>
                         <button onClick={() => {setEditingStudent(student); window.scrollTo({top:0});}} className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors" title="Sửa"><Edit2 size={16}/></button>
-                        <button onClick={() => handleDelete(student.id)} className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors" title="Xóa"><Trash2 size={16}/></button>
+                        <button onClick={() => setStudentToDelete(student)} className="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors" title="Xóa"><Trash2 size={16}/></button>
                      </div>
                   </div>
                ))}
@@ -982,6 +1026,12 @@ function StudentsView({ students, showToast }) {
                       <span className="text-gray-500">SĐT Phụ huynh</span>
                       <span className="font-medium text-blue-600">{studentDetails.parentPhone || '-'}</span>
                    </div>
+                   <div className="flex justify-between border-b border-gray-50 pb-2">
+                      <span className="text-gray-500">Ngày nhập học</span>
+                      <span className="font-medium text-gray-800 text-right">
+                         {studentDetails.admissionDate ? new Date(studentDetails.admissionDate).toLocaleDateString('vi-VN') : '-'}
+                      </span>
+                   </div>
                    <div className="flex flex-col gap-1 pt-1">
                       <span className="text-gray-500">Điểm hồ bơi đăng ký:</span>
                       <span className="font-medium text-emerald-600 bg-emerald-50 p-2 rounded-lg text-center">{studentDetails.swimmingPool || 'Chưa đăng ký'}</span>
@@ -1010,6 +1060,31 @@ function StudentsView({ students, showToast }) {
                 </div>
                 <button onClick={() => setSelectedCard(null)} className="w-full py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-bold">Đóng</button>
              </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP XÁC NHẬN XÓA HỌC SINH */}
+      {studentToDelete && (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-xl animate-in zoom-in-95 duration-200 p-5">
+            <div className="text-center">
+               <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-100 mb-4">
+                  <AlertCircle className="h-6 w-6 text-rose-600" />
+               </div>
+               <h3 className="text-lg font-bold text-gray-900 mb-2">Xác nhận xóa</h3>
+               <p className="text-sm text-gray-500 mb-6">
+                  Bạn có chắc chắn muốn xóa học sinh <span className="font-bold text-gray-800">{studentToDelete.fullName}</span>? Hành động này không thể hoàn tác.
+               </p>
+               <div className="flex gap-3">
+                  <button onClick={() => setStudentToDelete(null)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-200 transition-colors">
+                     Hủy
+                  </button>
+                  <button onClick={executeDelete} className="flex-1 py-2.5 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 transition-colors shadow-sm">
+                     Xóa ngay
+                  </button>
+               </div>
+            </div>
           </div>
         </div>
       )}
