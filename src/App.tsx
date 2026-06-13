@@ -180,7 +180,7 @@ export default function App() {
         <div className="max-w-md mx-auto px-4 py-6">
           {activeTab === 'dashboard' && <DashboardView stats={stats} />}
           {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} />}
-          {activeTab === 'students' && <StudentsView students={students} user={user} showToast={showToast} />}
+          {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} />}
           {activeTab === 'scanner' && <ScannerView students={students} attendance={attendance} user={user} showToast={showToast} />}
           {activeTab === 'history' && <HistoryView attendance={todayAttendance} students={students} />}
         </div>
@@ -391,8 +391,16 @@ function ClassesView({ classes, students, attendance, showToast }) {
       await updateDoc(classRef, {
         name: editingClass.name, session: editingClass.session, classCode: editingClass.classCode
       });
+      
+      // SỬA Ở ĐÂY: Quét tìm các HS trong lớp và đổi tên hệ thống sang tên mới
+      const studentsInClass = students.filter(s => s.classId === editingClass.id);
+      const updatePromises = studentsInClass.map(s => 
+          updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', s.id), { systemClassName: editingClass.name })
+      );
+      await Promise.all(updatePromises);
+
       if (selectedClass && selectedClass.id === editingClass.id) {
-         setSelectedClass({...selectedClass, ...editingClass});
+          setSelectedClass({...selectedClass, ...editingClass});
       }
       setEditingClass(null);
       showToast('Đã cập nhật thông tin lớp!');
@@ -403,10 +411,14 @@ function ClassesView({ classes, students, attendance, showToast }) {
     if(window.confirm(`Xóa lớp ${className}? Học sinh trong lớp sẽ không bị xóa.`)) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'classes', id));
+        
         const studentsInClass = students.filter(s => s.classId === id);
-        for(let s of studentsInClass) {
-           await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', s.id), { classId: null, systemClassName: '' });
-        }
+        // SỬA Ở ĐÂY: Xử lý song song bằng Promise.all để gỡ học sinh trong tích tắc
+        const removePromises = studentsInClass.map(s => 
+           updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'students', s.id), { classId: null, systemClassName: '' })
+        );
+        await Promise.all(removePromises);
+        
         if(selectedClass?.id === id) setSelectedClass(null);
         showToast('Đã xóa lớp học');
       } catch (e) { showToast('Lỗi khi xóa', 'error'); }
@@ -695,7 +707,7 @@ function ClassesView({ classes, students, attendance, showToast }) {
   );
 }
 
-function StudentsView({ students, showToast }) {
+function StudentsView({ students, classes, showToast }) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [studentDetails, setStudentDetails] = useState(null);
@@ -709,6 +721,15 @@ function StudentsView({ students, showToast }) {
   
   const [visibleCount, setVisibleCount] = useState(15);
   const [studentToDelete, setStudentToDelete] = useState(null); // State quản lý modal xác nhận xóa
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportData, setExportData] = useState({ classId: null, className: '' });
+
+  // Sửa đoạn này ở phía trên cùng của giao diện StudentsView
+  const studentsToPrint = exportData.classId === 'all' 
+      ? students.slice(exportData.startIndex, exportData.endIndex)
+      : exportData.classId 
+          ? students.filter(s => s.classId === exportData.classId).slice(exportData.startIndex, exportData.endIndex)
+          : [];
 
   // Thêm useEffect để tự động tải thư viện Excel và PDF khi mở trang
   useEffect(() => {
@@ -724,36 +745,66 @@ function StudentsView({ students, showToast }) {
     }
   }, []);
   
-  const handleExportPDF = () => {
-    if (!window.html2pdf) { showToast('Đang tải công cụ xuất PDF...', 'error'); return; }
-    if (students.length === 0) { showToast('Không có học sinh!', 'error'); return; }
-    
-    setIsExporting(true); 
-    showToast('Đang chuẩn bị dữ liệu tạo thẻ... Vui lòng đợi!');
+  const executeExport = (clsId, clsName, startIndex = 0, endIndex = 9999) => {
+    // 1. Chỉ lọc và cắt lấy đúng số lượng học sinh trong đợt này
+    let baseStudents = clsId === 'all' ? students : students.filter(s => s.classId === clsId);
+    const targetStudents = baseStudents.slice(startIndex, endIndex);
+        
+    if (targetStudents.length === 0) {
+        showToast(`Không có dữ liệu trong đợt này!`, 'error');
+        return;
+    }
+
+    // 2. Cập nhật State để khung Print render đúng nhóm học sinh đang chọn
+    setExportData({ classId: clsId, className: clsName, startIndex, endIndex });
+    setShowExportModal(false);
+    setIsExporting(true);
+    showToast(`Đang xử lý thẻ từ ${startIndex + 1} đến ${Math.min(endIndex, baseStudents.length)}...`);
     
     window.scrollTo(0, 0);
 
+    // 3. Mở rộng khung DOM để trình duyệt chụp được hết hình
+    const appContainer = document.querySelector('.h-screen.overflow-hidden');
+    if (appContainer) {
+       appContainer.classList.remove('h-screen', 'overflow-hidden');
+       appContainer.classList.add('min-h-screen');
+    }
+
+    // 4. Chờ 3.5 giây để ảnh QR tải đầy đủ rồi mới xuất PDF
     setTimeout(async () => {
        const element = printRef.current;
+       const safeClassName = clsName.replace(/[^a-zA-Z0-9]/g, '_');
+       
+       // Đặt tên file thông minh (Nếu xuất tất cả thì không có phần đợt)
+       const fileName = clsId === 'all' 
+          ? `The_QR_Tat_Ca_${Date.now()}.pdf`
+          : `The_QR_${safeClassName}_Phan_${startIndex + 1}_den_${Math.min(endIndex, baseStudents.length)}.pdf`;
+
        const opt = {
-         margin: 5, filename: `The_QR_${Date.now()}.pdf`,
+         margin: 5, 
+         filename: fileName,
          image: { type: 'jpeg', quality: 0.98 },
-         html2canvas: { scale: 2, useCORS: true, scrollX: 0, scrollY: 0, backgroundColor: '#ffffff' },
+         html2canvas: { scale: 1.2, useCORS: true, scrollY: 0, windowWidth: 1024, backgroundColor: '#ffffff' },
          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
          pagebreak: { mode: ['avoid-all', 'css'] }
        };
        
        try {
           await window.html2pdf().set(opt).from(element).save();
-          showToast('Xuất PDF thành công!');
+          showToast(`Đã xuất PDF đợt này thành công!`);
        } catch(e) { 
           console.error(e);
           showToast('Lỗi xuất PDF', 'error'); 
-       } 
-       finally { 
+       } finally { 
+          // 5. Dọn dẹp và khôi phục lại giao diện như ban đầu
           setIsExporting(false); 
+          setExportData({ classId: null, className: '', startIndex: 0, endIndex: 9999 }); 
+          if (appContainer) {
+             appContainer.classList.add('h-screen', 'overflow-hidden');
+             appContainer.classList.remove('min-h-screen');
+          }
        }
-    }, 2000);
+    }, 3500); 
   };
 
   const handleUpdateStudent = async (e) => {
@@ -875,7 +926,7 @@ function StudentsView({ students, showToast }) {
                <span className="text-[10px] font-bold">Nhập Excel</span>
             </button>
          </div>
-         <button onClick={handleExportPDF} disabled={isExporting} className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-rose-600 disabled:opacity-50">
+         <button onClick={() => setShowExportModal(true)} disabled={isExporting} className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-rose-600 disabled:opacity-50">
             {isExporting ? <Loader2 size={20} className="animate-spin mb-1"/> : <Printer size={20} className="mb-1"/>}
             <span className="text-[10px] font-bold">Xuất thẻ (PDF)</span>
          </button>
@@ -1089,48 +1140,407 @@ function StudentsView({ students, showToast }) {
         </div>
       )}
 
-      {/* MÀN HÌNH LOADING KHI XUẤT PDF TRÁNH THAO TÁC NGƯỜI DÙNG */}
-      {isExporting && (
-        <div className="fixed inset-0 bg-white/90 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
-           <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
-           <h2 className="text-xl font-bold text-gray-900 text-center mb-2">Đang vẽ thẻ và xử lý PDF...</h2>
-           <p className="text-sm text-gray-600 text-center max-w-sm">
-              Vui lòng <b>không đóng trình duyệt</b> hay <b>cuộn trang</b> lúc này.<br/><br/>
-              (Nếu danh sách có hàng chục học sinh, quá trình tạo ảnh sẽ mất khoảng 10-20 giây)
-           </p>
+      {/* POPUP CHỌN LỚP XUẤT PDF */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[80vh] overflow-hidden animate-in zoom-in-95 duration-200">
+             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                 <h3 className="font-bold text-gray-800">Chọn lớp xuất thẻ PDF</h3>
+                 <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-gray-700 font-bold px-2">&times;</button>
+             </div>
+             <div className="p-4 flex-1 overflow-y-auto">
+                 <ul className="space-y-2">
+                     {/* Tùy chọn in tất cả */}
+                     <li 
+                         onClick={() => executeExport('all', 'Tat_Ca')}
+                         className="p-3 border rounded-xl hover:bg-rose-50 hover:border-rose-200 cursor-pointer transition-colors flex justify-between items-center"
+                     >
+                         <span className="font-bold text-rose-600">Tất cả học sinh</span>
+                         <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{students.length} HS</span>
+                     </li>
+                     
+                     {/* Danh sách các lớp trong hệ thống */}
+                     {classes && classes.length > 0 ? classes.map(cls => {
+                        const classStudents = students.filter(s => s.classId === cls.id);
+                        const count = classStudents.length;
+                        const CHUNK_SIZE = 90; // Giới hạn xuất tối đa 90 học sinh (15 trang) một lần để an toàn 100%
+
+                        // Nếu lớp ít học sinh, hiển thị 1 nút tải bình thường
+                        if (count <= CHUNK_SIZE) {
+                           return (
+                                 <li 
+                                    key={cls.id} 
+                                    onClick={() => executeExport(cls.id, cls.name)}
+                                    className="p-3 border rounded-xl hover:bg-indigo-50 hover:border-indigo-200 cursor-pointer transition-colors flex justify-between items-center mb-2"
+                                 >
+                                    <div>
+                                       <div className="font-bold text-gray-800">{cls.name}</div>
+                                       <div className="text-[10px] text-gray-500">{cls.classCode}</div>
+                                    </div>
+                                    <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-bold">{count} HS</span>
+                                 </li>
+                           )
+                        } 
+                        // Nếu lớp cực đông (VD: 226 HS), cắt thành nhiều nút tải
+                        else {
+                           const chunks = Math.ceil(count / CHUNK_SIZE);
+                           return (
+                                 <li key={cls.id} className="p-3 border rounded-xl mb-2 bg-gray-50">
+                                    <div className="flex justify-between items-center mb-3">
+                                       <div>
+                                             <div className="font-bold text-gray-800">{cls.name}</div>
+                                             <div className="text-[10px] text-rose-500 font-medium">Lớp quá đông, vui lòng tải theo từng đợt</div>
+                                       </div>
+                                       <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{count} HS</span>
+                                    </div>
+                                    {/* Lưới các nút chia đợt */}
+                                    <div className="grid grid-cols-2 gap-2">
+                                       {Array.from({length: chunks}).map((_, i) => {
+                                             const start = i * CHUNK_SIZE;
+                                             const end = Math.min((i + 1) * CHUNK_SIZE, count);
+                                             return (
+                                                <button
+                                                   key={i}
+                                                   onClick={() => executeExport(cls.id, cls.name, start, end)}
+                                                   className="p-2 bg-white border border-indigo-200 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors shadow-sm"
+                                                >
+                                                   Đợt {i + 1}: ({start + 1} - {end})
+                                                </button>
+                                             )
+                                       })}
+                                    </div>
+                                 </li>
+                           )
+                        }
+                     }) : (
+                        <div className="text-center text-sm text-gray-500 py-4">Chưa có lớp học nào được tạo.</div>
+                     )}
+                 </ul>
+             </div>
+          </div>
         </div>
       )}
 
-      {/* DOM XUẤT PDF: Nằm ở z-[50] bên dưới màn hình loading để trình duyệt render thật thay vì ẩn -9999px */}
-      <div className={`absolute left-0 top-0 w-full bg-white ${isExporting ? 'z-[50] opacity-100' : '-z-50 opacity-0 h-0 overflow-hidden pointer-events-none'}`}>
-         <div ref={printRef} className="w-[190mm] bg-white mx-auto text-black pt-4 pb-8 min-h-screen">
-            <h1 className="text-2xl font-bold text-center mb-8 uppercase">Danh sách thẻ học sinh</h1>
-            <div className="flex flex-wrap gap-[10mm] justify-center">
-               {students.map(student => (
-                  <div key={student.id} style={{ width: '5.4cm', height: '8.6cm', pageBreakInside: 'avoid' }} className="border-[2px] border-indigo-600 rounded-xl overflow-hidden flex flex-col bg-white shrink-0 box-border">
-                     <div className="bg-indigo-600 text-white px-2 py-3 text-center shrink-0 flex flex-col justify-center min-h-[1.5cm]">
-                        <h2 className="font-bold text-[12px] uppercase leading-tight">{student.school || 'THẺ HỌC SINH'}</h2>
-                     </div>
-                     <div className="p-3 flex flex-col items-center flex-1 w-full text-center">
-                        <h3 className="text-[14px] font-bold text-gray-900 mb-1.5 leading-tight">{student.fullName}</h3>
-                        <p className="text-[11px] text-gray-600 font-medium mb-1">Mã HS: <span className="text-black font-bold">{student.studentCode}</span></p>
-                        <p className="text-[11px] text-gray-600 font-medium mb-3">Lớp: <span className="text-black font-bold">{student.className || 'N/A'}</span></p>
-                        <div className="mt-auto w-full flex items-center justify-center p-1">
-                           <img 
-                              src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${student.qrToken}&margin=0`} 
-                              className="w-[3.6cm] h-[3.6cm] object-contain"
-                              crossOrigin="anonymous"
-                           />
+      {/* MÀN HÌNH LOADING KHI XUẤT PDF TRÁNH THAO TÁC NGƯỜI DÙNG */}
+      {isExporting && (
+         <div className="fixed inset-0 bg-white/90 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
+            <Loader2 className="animate-spin text-indigo-600 mb-4" size={48} />
+            <h2 className="text-xl font-bold text-gray-900 text-center mb-2">Đang vẽ thẻ và xử lý PDF...</h2>
+            <p className="text-sm text-gray-600 text-center max-w-sm">
+               Vui lòng <b>không đóng trình duyệt</b> hay <b>cuộn trang</b> lúc này.<br/><br/>
+               (Nếu danh sách có hàng chục học sinh, quá trình tạo ảnh sẽ mất khoảng 10-20 giây)
+            </p>
+         </div>
+      )}
+
+      {/* KHUNG PRINT: Đã được xử lý chia 6 thẻ/trang và đổi Header */}
+      <div className={isExporting ? "absolute left-0 top-0 w-full bg-white z-[50] pb-20" : "hidden"}>
+         <div ref={printRef} className="w-[190mm] bg-white mx-auto text-black pt-4 pb-8 h-max">
+            
+            {/* THUẬT TOÁN CHIA MẢNG: Mỗi trang 6 học sinh */}
+            {studentsToPrint.reduce((resultArray, item, index) => { 
+               const chunkIndex = Math.floor(index / 6); 
+               if(!resultArray[chunkIndex]) resultArray[chunkIndex] = [];
+               resultArray[chunkIndex].push(item);
+               return resultArray;
+            }, []).map((chunk, pageIndex, chunkArray) => (
+               
+               <div key={`page-${pageIndex}`} className="page-container w-full relative">
+                  {/* Tiêu đề trang: Có thể in ở mọi trang hoặc chỉ trang đầu. (Đang set chỉ trang đầu) */}
+                  {pageIndex === 0 && (
+                      <h1 className="text-2xl font-bold text-center mb-8 uppercase">
+                         Danh sách thẻ học sinh {exportData.className !== 'Tat_Ca' && exportData.className ? `- Lớp ${exportData.className}` : ''}
+                      </h1>
+                  )}
+                  {/* Khoảng trống bù trừ nếu trang sau không có tiêu đề */}
+                  {pageIndex > 0 && <div className="h-10"></div>}
+
+                  {/* LƯỚI 6 THẺ */}
+                  <div className="flex flex-wrap gap-[10mm] justify-center">
+                     {chunk.map(student => (
+                        <div key={student.id} style={{ width: '5.4cm', height: '8.6cm' }} className="border-[2px] border-indigo-600 rounded-xl overflow-hidden flex flex-col bg-white shrink-0 box-border mb-[10mm]">
+                           
+                           {/* HEADER THẺ: Đã đổi sang Hệ thống/Hồ bơi */}
+                           <div className="bg-indigo-600 text-white px-2 py-3 text-center shrink-0 flex flex-col justify-center min-h-[1.5cm]">
+                              <h2 className="font-bold text-[12px] uppercase leading-tight">
+                                 {/* Ưu tiên hiển thị: 1. Điểm hồ bơi -> 2. Tên lớp hệ thống -> 3. Mặc định */}
+                                 {student.swimmingPool || student.systemClassName}
+                              </h2>
+                           </div>
+
+                           {/* NỘI DUNG THẺ */}
+                           <div className="p-3 flex flex-col items-center flex-1 w-full text-center">
+                              <h3 className="text-[14px] font-bold text-gray-900 mb-1.5 leading-tight">{student.fullName}</h3>
+                              <p className="text-[11px] text-gray-600 font-medium mb-1">Mã HS: <span className="text-black font-bold">{student.studentCode}</span></p>
+                              <p className="text-[11px] text-gray-600 font-medium mb-3">Lớp: <span className="text-black font-bold">{student.className || 'N/A'}</span></p>
+                              <div className="mt-auto w-full flex items-center justify-center p-1">
+                                 <img 
+                                    src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${student.qrToken}&margin=0`} 
+                                    className="w-[3.6cm] h-[3.6cm] object-contain"
+                                    crossOrigin="anonymous"
+                                    alt="QR"
+                                 />
+                              </div>
+                           </div>
                         </div>
-                     </div>
+                     ))}
                   </div>
-               ))}
-            </div>
+
+                  {/* THẺ ĐIỀU HƯỚNG NGẮT TRANG PDF (Ngoại trừ trang cuối cùng) */}
+                  {pageIndex < chunkArray.length - 1 && (
+                     <div className="html2pdf__page-break"></div>
+                  )}
+               </div>
+            ))}
          </div>
       </div>
     </div>
   );
 }
+
+// function ScannerView({ students, attendance, user, showToast }) {
+//   const [isScanning, setIsScanning] = useState(true);
+//   const [lastScan, setLastScan] = useState(null);
+//   const [scanTab, setScanTab] = useState('auto'); 
+//   const [autoMode, setAutoMode] = useState(null); 
+//   const [manualSearch, setManualSearch] = useState('');
+//   const [manualId, setManualId] = useState('');
+//   const lastScannedRef = useRef({ token: null, time: 0 });
+//   const html5QrCodeRef = useRef(null);
+//   const fileInputRef = useRef(null);
+
+//   useEffect(() => {
+//     if (!window.Html5Qrcode) {
+//       const script = document.createElement('script'); 
+//       script.src = "https://unpkg.com/html5-qrcode"; 
+//       document.body.appendChild(script);
+//     }
+//     return () => { 
+//       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+//           html5QrCodeRef.current.stop().catch(e => console.log(e));
+//       }
+//     };
+//   }, []);
+
+//   useEffect(() => {
+//     if (scanTab !== 'auto' && autoMode === 'camera') {
+//         stopCamera();
+//     }
+//   }, [scanTab, autoMode]);
+
+//   const handleScanWithToken = async (token) => {
+//     if (!user || !token) return;
+//     setIsScanning(false);
+//     const student = students.find(s => s.qrToken === token);
+    
+//     if (!student) {
+//       showToast('Mã QR không hợp lệ!', 'error');
+//       setTimeout(() => setIsScanning(true), 2000);
+//       return;
+//     }
+
+//     const todayString = getLocalTodayString();
+//     const alreadyScanned = attendance.find(log => log.studentId === student.id && log.dateString === todayString);
+
+//     if (alreadyScanned) {
+//       showToast(`${student.fullName} đã điểm danh!`, 'error');
+//       setLastScan({ ...student, status: 'warning', time: new Date().toLocaleTimeString('vi-VN') });
+//     } else {
+//       try {
+//         // Ghi log điểm danh
+//         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), {
+//           studentId: student.id, timestamp: Date.now(), dateString: todayString, scannedBy: user.uid, status: 'present'
+//         });
+        
+//         // Tăng tổng số buổi đã học lên 1
+//         const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', student.id);
+//         const currentTotal = student.totalAttendance || 0;
+//         await updateDoc(studentRef, {
+//            totalAttendance: currentTotal + 1
+//         });
+
+//         showToast(`Điểm danh: ${student.fullName}`);
+//         setLastScan({ ...student, status: 'success', time: new Date().toLocaleTimeString('vi-VN') });
+        
+//         if(window.AudioContext) {
+//            const ctx = new window.AudioContext();
+//            const osc = ctx.createOscillator(); osc.connect(ctx.destination);
+//            osc.frequency.value = 800; osc.start(); osc.stop(ctx.currentTime + 0.1);
+//         }
+//       } catch (error) { showToast('Lỗi lưu điểm danh', 'error'); }
+//     }
+//     setTimeout(() => setIsScanning(true), 2000);
+//   };
+
+//   const startCamera = () => {
+//       if (!window.Html5Qrcode) {
+//           showToast('Đang tải công cụ quét, vui lòng thử lại.', 'error');
+//           return;
+//       }
+//       setAutoMode('camera');
+//       setTimeout(() => {
+//           try {
+//               html5QrCodeRef.current = new window.Html5Qrcode("qr-reader-custom");
+//               html5QrCodeRef.current.start(
+//                   { facingMode: "environment" },
+//                   { fps: 10, aspectRatio: 1.0 },
+//                   (decodedText) => {
+//                       const now = Date.now();
+//                       if (lastScannedRef.current.token === decodedText && now - lastScannedRef.current.time < 3000) return; 
+//                       lastScannedRef.current = { token: decodedText, time: now };
+//                       handleScanWithToken(decodedText);
+//                   },
+//                   () => {}
+//               ).catch(err => {
+//                   showToast('Lỗi truy cập Camera. Vui lòng cấp quyền!', 'error');
+//                   setAutoMode(null);
+//               });
+//           } catch (e) {
+//               showToast('Lỗi khởi tạo Camera.', 'error');
+//               setAutoMode(null);
+//           }
+//       }, 100);
+//   };
+
+//   const stopCamera = () => {
+//       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+//           html5QrCodeRef.current.stop().then(() => {
+//               html5QrCodeRef.current.clear();
+//               setAutoMode(null);
+//           }).catch(e => console.log(e));
+//       } else {
+//           setAutoMode(null);
+//       }
+//   };
+
+//   const handleFileUpload = async (e) => {
+//       const file = e.target.files[0];
+//       if (!file || !window.Html5Qrcode) return;
+      
+//       try {
+//           const html5QrCode = new window.Html5Qrcode("qr-reader-hidden");
+//           const decodedText = await html5QrCode.scanFile(file, true);
+//           handleScanWithToken(decodedText);
+//       } catch (err) {
+//           showToast('Không tìm thấy mã QR trong ảnh này!', 'error');
+//       }
+//       if (fileInputRef.current) fileInputRef.current.value = '';
+//   };
+
+//   const filteredStudents = students.filter(s => {
+//       if (!manualSearch) return true;
+//       const q = manualSearch.toLowerCase();
+//       return (s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q));
+//   });
+
+//   return (
+//     <div className="w-full max-w-md mx-auto space-y-4 animate-in fade-in">
+//       <div className="flex bg-gray-200 p-1 rounded-xl w-full">
+//         <button onClick={() => setScanTab('auto')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'auto' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Camera / Ảnh</button>
+//         <button onClick={() => setScanTab('manual')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'manual' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Quét thủ công</button>
+//       </div>
+
+//       <div className="bg-white rounded-3xl overflow-hidden relative shadow-md border border-gray-100 aspect-square w-full flex flex-col">
+//         {scanTab === 'auto' ? (
+//           <div className="w-full h-full relative flex flex-col items-center justify-center bg-gray-50">
+//             {autoMode === null ? (
+//                 <div className="flex flex-col gap-4 w-3/4">
+//                    <button onClick={startCamera} className="bg-indigo-600 text-white p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-700 transition-colors">
+//                       <Scan size={32} />
+//                       <span className="font-bold">Quét QR trực tiếp</span>
+//                    </button>
+//                    <div className="relative">
+//                       <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+//                       <button onClick={() => fileInputRef.current?.click()} className="w-full bg-white text-indigo-600 border-2 border-indigo-600 p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-50 transition-colors">
+//                          <Upload size={32} />
+//                          <span className="font-bold">Chọn từ thư viện ảnh</span>
+//                       </button>
+//                    </div>
+//                 </div>
+//             ) : (
+//                 <div className="w-full h-full relative bg-black overflow-hidden">
+//                     <div id="qr-reader-custom" className="w-full h-full absolute inset-0 [&>video]:w-full [&>video]:h-full [&>video]:object-cover"></div>
+//                     <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center p-4">
+//                        <div className="w-full h-full relative border border-white/10 rounded-2xl shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
+//                           <div className="absolute top-0 left-0 w-10 h-10 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl -ml-[2px] -mt-[2px]"></div>
+//                           <div className="absolute top-0 right-0 w-10 h-10 border-t-4 border-r-4 border-emerald-400 rounded-tr-2xl -mr-[2px] -mt-[2px]"></div>
+//                           <div className="absolute bottom-0 left-0 w-10 h-10 border-b-4 border-l-4 border-emerald-400 rounded-bl-2xl -ml-[2px] -mb-[2px]"></div>
+//                           <div className="absolute bottom-0 right-0 w-10 h-10 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl -mr-[2px] -mb-[2px]"></div>
+//                        </div>
+//                     </div>
+//                     <button onClick={stopCamera} className="absolute top-4 right-4 bg-black/40 backdrop-blur-md text-white px-3 py-1.5 rounded-lg text-xs font-bold border border-white/20 z-20">Đóng Camera</button>
+                    
+//                     {!isScanning && (
+//                       <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
+//                          <CheckCircle size={60} className="text-emerald-500 mb-4 animate-bounce" />
+//                          <h2 className="text-gray-800 text-xl font-bold">Xong!</h2>
+//                       </div>
+//                     )}
+//                 </div>
+//             )}
+//             <div id="qr-reader-hidden" style={{display: 'none'}}></div>
+//           </div>
+//         ) : (
+//           <div className="bg-gray-50 w-full h-full flex flex-col p-4 relative">
+//              <h3 className="font-bold text-gray-700 mb-2 shrink-0">Chọn học sinh để điểm danh</h3>
+//              <div className="relative mb-3 shrink-0">
+//                 <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+//                 <input 
+//                    type="text" placeholder="Tìm tên hoặc mã HS..." 
+//                    className="w-full border border-gray-300 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-sm"
+//                    value={manualSearch} onChange={(e) => setManualSearch(e.target.value)}
+//                 />
+//              </div>
+             
+//              <div className="flex-1 overflow-y-auto bg-white border border-gray-200 rounded-xl mb-3 shadow-inner">
+//                 {filteredStudents.length === 0 ? (
+//                    <div className="p-4 text-center text-gray-400 text-sm">Không tìm thấy học sinh.</div>
+//                 ) : (
+//                    <ul className="divide-y divide-gray-50">
+//                       {filteredStudents.map(s => (
+//                          <li 
+//                             key={s.id} onClick={() => setManualId(s.id === manualId ? '' : s.id)}
+//                             className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${manualId === s.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+//                          >
+//                             <div className="text-left">
+//                                <div className="font-medium text-gray-800">{s.fullName}</div>
+//                                <div className="text-[10px] text-gray-500">{s.studentCode} {s.className ? `(${s.className})` : ''}</div>
+//                             </div>
+//                             {manualId === s.id && <CheckCircle size={16} className="text-indigo-600 shrink-0" />}
+//                          </li>
+//                       ))}
+//                    </ul>
+//                 )}
+//              </div>
+
+//              <button 
+//                 onClick={() => manualId && handleScanWithToken(students.find(s=>s.id===manualId)?.qrToken)} 
+//                 disabled={!manualId || !isScanning} 
+//                 className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold disabled:opacity-50 shrink-0 shadow-sm transition-opacity"
+//              >
+//                 {isScanning ? 'Xác nhận Quét' : 'Đang xử lý...'}
+//              </button>
+//           </div>
+//         )}
+//       </div>
+
+//       {lastScan && (
+//         <div className={`p-4 rounded-2xl border ${lastScan.status === 'success' ? 'bg-emerald-50 border-emerald-200' : 'bg-yellow-50 border-yellow-200'} flex items-center gap-4 shadow-sm animate-in slide-in-from-bottom-4`}>
+//           <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center font-bold text-xl text-gray-500 overflow-hidden shrink-0 shadow-sm border border-white">
+//              {lastScan.avatar ? <img src={lastScan.avatar} className="w-full h-full object-cover" /> : lastScan.fullName.charAt(0)}
+//           </div>
+//           <div className="truncate text-left">
+//             <h3 className="text-base font-bold text-gray-900 truncate">{lastScan.fullName}</h3>
+//             <p className="text-xs text-gray-600 truncate">{lastScan.className || 'Không có lớp'} | {lastScan.studentCode}</p>
+//             <p className={`text-[11px] font-bold mt-1 ${lastScan.status === 'success' ? 'text-emerald-600' : 'text-yellow-600'}`}>
+//               {lastScan.time} - {lastScan.status === 'success' ? 'Thành công' : 'Đã điểm danh'}
+//             </p>
+//           </div>
+//         </div>
+//       )}
+//     </div>
+//   );
+// }
 
 function ScannerView({ students, attendance, user, showToast }) {
   const [isScanning, setIsScanning] = useState(true);
@@ -1139,9 +1549,50 @@ function ScannerView({ students, attendance, user, showToast }) {
   const [autoMode, setAutoMode] = useState(null); 
   const [manualSearch, setManualSearch] = useState('');
   const [manualId, setManualId] = useState('');
+
+  // STATE MỚI CHO TRẠM QUÉT (KIOSK MODE)
+  const [isKioskMode, setIsKioskMode] = useState(false);
+  const [kioskResult, setKioskResult] = useState(null);
+
   const lastScannedRef = useRef({ token: null, time: 0 });
   const html5QrCodeRef = useRef(null);
   const fileInputRef = useRef(null);
+  const kioskTimeoutRef = useRef(null);
+  const latestScanLogic = useRef();
+
+  // Đảm bảo event listener luôn sử dụng hàm mới nhất
+  useEffect(() => {
+    latestScanLogic.current = handleScanWithToken;
+  });
+
+  // LẮNG NGHE TÍN HIỆU TỪ MÁY QUÉT CHUYÊN DỤNG (HOẠT ĐỘNG NGẦM)
+  useEffect(() => {
+    let buffer = '';
+    let lastKeyTime = Date.now();
+
+    const handleHardwareScan = (e) => {
+      // Bỏ qua nếu người dùng đang tự gõ vào ô tìm kiếm thủ công
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      const currentTime = Date.now();
+      // Máy quét phần cứng gõ phím rất nhanh (<50ms). Nếu quá 50ms -> là người gõ -> Xóa chuỗi
+      if (currentTime - lastKeyTime > 50) buffer = '';
+      lastKeyTime = currentTime;
+
+      if (e.key === 'Enter') {
+        if (buffer.startsWith('QR_')) {
+          e.preventDefault();
+          latestScanLogic.current(buffer); // Chạy lệnh điểm danh
+        }
+        buffer = '';
+      } else if (e.key.length === 1) {
+        buffer += e.key;
+      }
+    };
+
+    window.addEventListener('keydown', handleHardwareScan);
+    return () => window.removeEventListener('keydown', handleHardwareScan);
+  }, []);
 
   useEffect(() => {
     if (!window.Html5Qrcode) {
@@ -1157,19 +1608,30 @@ function ScannerView({ students, attendance, user, showToast }) {
   }, []);
 
   useEffect(() => {
-    if (scanTab !== 'auto' && autoMode === 'camera') {
-        stopCamera();
-    }
+    if (scanTab !== 'auto' && autoMode === 'camera') stopCamera();
   }, [scanTab, autoMode]);
 
+  // HÀM XỬ LÝ ĐIỂM DANH ĐƯỢC TỐI ƯU CHO GIAO DIỆN KIOSK
   const handleScanWithToken = async (token) => {
     if (!user || !token) return;
     setIsScanning(false);
+    
+    // Xóa bộ đếm thời gian cũ nếu quét liên tục quá nhanh
+    if (kioskTimeoutRef.current) clearTimeout(kioskTimeoutRef.current);
+
+    // Phát âm thanh tiếng Bíp khi máy bắt được mã
+    if(window.AudioContext) {
+       const ctx = new window.AudioContext();
+       const osc = ctx.createOscillator(); osc.connect(ctx.destination);
+       osc.frequency.value = 800; osc.start(); osc.stop(ctx.currentTime + 0.1);
+    }
+
     const student = students.find(s => s.qrToken === token);
     
     if (!student) {
+      setKioskResult({ type: 'error', message: 'MÃ THẺ KHÔNG TỒN TẠI' });
       showToast('Mã QR không hợp lệ!', 'error');
-      setTimeout(() => setIsScanning(true), 2000);
+      kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 3000);
       return;
     }
 
@@ -1177,40 +1639,31 @@ function ScannerView({ students, attendance, user, showToast }) {
     const alreadyScanned = attendance.find(log => log.studentId === student.id && log.dateString === todayString);
 
     if (alreadyScanned) {
-      showToast(`${student.fullName} đã điểm danh!`, 'error');
+      setKioskResult({ type: 'warning', student, message: 'ĐÃ ĐIỂM DANH TRƯỚC ĐÓ' });
       setLastScan({ ...student, status: 'warning', time: new Date().toLocaleTimeString('vi-VN') });
     } else {
       try {
-        // Ghi log điểm danh
         await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), {
           studentId: student.id, timestamp: Date.now(), dateString: todayString, scannedBy: user.uid, status: 'present'
         });
         
-        // Tăng tổng số buổi đã học lên 1
         const studentRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', student.id);
         const currentTotal = student.totalAttendance || 0;
-        await updateDoc(studentRef, {
-           totalAttendance: currentTotal + 1
-        });
+        await updateDoc(studentRef, { totalAttendance: currentTotal + 1 });
 
-        showToast(`Điểm danh: ${student.fullName}`);
+        setKioskResult({ type: 'success', student, message: 'ĐIỂM DANH THÀNH CÔNG!' });
         setLastScan({ ...student, status: 'success', time: new Date().toLocaleTimeString('vi-VN') });
-        
-        if(window.AudioContext) {
-           const ctx = new window.AudioContext();
-           const osc = ctx.createOscillator(); osc.connect(ctx.destination);
-           osc.frequency.value = 800; osc.start(); osc.stop(ctx.currentTime + 0.1);
-        }
-      } catch (error) { showToast('Lỗi lưu điểm danh', 'error'); }
+      } catch (error) { 
+        setKioskResult({ type: 'error', message: 'LỖI MẠNG, CHƯA LƯU ĐƯỢC' });
+      }
     }
-    setTimeout(() => setIsScanning(true), 2000);
+
+    // Đóng Popup lớn và đưa màn hình về trạng thái chờ quét tiếp sau 3 giây
+    kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 3000);
   };
 
   const startCamera = () => {
-      if (!window.Html5Qrcode) {
-          showToast('Đang tải công cụ quét, vui lòng thử lại.', 'error');
-          return;
-      }
+      if (!window.Html5Qrcode) return;
       setAutoMode('camera');
       setTimeout(() => {
           try {
@@ -1225,14 +1678,8 @@ function ScannerView({ students, attendance, user, showToast }) {
                       handleScanWithToken(decodedText);
                   },
                   () => {}
-              ).catch(err => {
-                  showToast('Lỗi truy cập Camera. Vui lòng cấp quyền!', 'error');
-                  setAutoMode(null);
-              });
-          } catch (e) {
-              showToast('Lỗi khởi tạo Camera.', 'error');
-              setAutoMode(null);
-          }
+              ).catch(() => setAutoMode(null));
+          } catch (e) { setAutoMode(null); }
       }, 100);
   };
 
@@ -1241,23 +1688,18 @@ function ScannerView({ students, attendance, user, showToast }) {
           html5QrCodeRef.current.stop().then(() => {
               html5QrCodeRef.current.clear();
               setAutoMode(null);
-          }).catch(e => console.log(e));
-      } else {
-          setAutoMode(null);
-      }
+          });
+      } else { setAutoMode(null); }
   };
 
   const handleFileUpload = async (e) => {
       const file = e.target.files[0];
       if (!file || !window.Html5Qrcode) return;
-      
       try {
           const html5QrCode = new window.Html5Qrcode("qr-reader-hidden");
           const decodedText = await html5QrCode.scanFile(file, true);
           handleScanWithToken(decodedText);
-      } catch (err) {
-          showToast('Không tìm thấy mã QR trong ảnh này!', 'error');
-      }
+      } catch (err) { showToast('Không tìm thấy mã QR!', 'error'); }
       if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -1269,108 +1711,168 @@ function ScannerView({ students, attendance, user, showToast }) {
 
   return (
     <div className="w-full max-w-md mx-auto space-y-4 animate-in fade-in">
-      <div className="flex bg-gray-200 p-1 rounded-xl w-full">
-        <button onClick={() => setScanTab('auto')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'auto' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Camera / Ảnh</button>
-        <button onClick={() => setScanTab('manual')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'manual' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Quét thủ công</button>
+      
+      {/* NÚT CHUYỂN ĐỔI CHẾ ĐỘ KIOSK */}
+      <div className="flex justify-end mb-2">
+          <button 
+              onClick={() => setIsKioskMode(!isKioskMode)}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 border ${isKioskMode ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}
+          >
+              {isKioskMode ? 'Đóng chế độ Kiosk' : 'Mở Kiosk (Trạm Quét Tự Động)'}
+          </button>
       </div>
 
-      <div className="bg-white rounded-3xl overflow-hidden relative shadow-md border border-gray-100 aspect-square w-full flex flex-col">
-        {scanTab === 'auto' ? (
-          <div className="w-full h-full relative flex flex-col items-center justify-center bg-gray-50">
-            {autoMode === null ? (
-                <div className="flex flex-col gap-4 w-3/4">
-                   <button onClick={startCamera} className="bg-indigo-600 text-white p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-700 transition-colors">
-                      <Scan size={32} />
-                      <span className="font-bold">Quét QR trực tiếp</span>
-                   </button>
-                   <div className="relative">
-                      <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                      <button onClick={() => fileInputRef.current?.click()} className="w-full bg-white text-indigo-600 border-2 border-indigo-600 p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-50 transition-colors">
-                         <Upload size={32} />
-                         <span className="font-bold">Chọn từ thư viện ảnh</span>
-                      </button>
+      {/* HIỂN THỊ GIAO DIỆN TÙY THEO CHẾ ĐỘ */}
+      {isKioskMode ? (
+        // GIAO DIỆN KIOSK TỐI GIẢN
+        <div className="bg-white rounded-3xl overflow-hidden relative shadow-sm border border-indigo-100 aspect-square w-full flex flex-col items-center justify-center text-center p-6 bg-indigo-50/20">
+           {autoMode === 'camera' ? (
+               <div className="w-full h-full relative bg-black overflow-hidden rounded-2xl">
+                  <div id="qr-reader-custom" className="w-full h-full absolute inset-0 [&>video]:w-full [&>video]:h-full [&>video]:object-cover"></div>
+                  <button onClick={stopCamera} className="absolute top-4 right-4 bg-black/40 text-white px-3 py-1.5 rounded-lg text-xs font-bold border border-white/20 z-20">Đóng Camera</button>
+               </div>
+           ) : (
+               <div className="flex flex-col items-center justify-center h-full">
+                   <div className="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 mb-6 animate-pulse">
+                      <Scan size={48} />
                    </div>
-                </div>
-            ) : (
-                <div className="w-full h-full relative bg-black overflow-hidden">
-                    <div id="qr-reader-custom" className="w-full h-full absolute inset-0 [&>video]:w-full [&>video]:h-full [&>video]:object-cover"></div>
-                    <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center p-4">
-                       <div className="w-full h-full relative border border-white/10 rounded-2xl shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
-                          <div className="absolute top-0 left-0 w-10 h-10 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl -ml-[2px] -mt-[2px]"></div>
-                          <div className="absolute top-0 right-0 w-10 h-10 border-t-4 border-r-4 border-emerald-400 rounded-tr-2xl -mr-[2px] -mt-[2px]"></div>
-                          <div className="absolute bottom-0 left-0 w-10 h-10 border-b-4 border-l-4 border-emerald-400 rounded-bl-2xl -ml-[2px] -mb-[2px]"></div>
-                          <div className="absolute bottom-0 right-0 w-10 h-10 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl -mr-[2px] -mb-[2px]"></div>
+                   <h2 className="text-xl font-bold text-gray-900 mb-2">TRẠM QUÉT THẺ</h2>
+                   <p className="text-sm text-gray-500 mb-8 max-w-[200px]">Đưa thẻ học sinh lướt qua máy quét chuyên dụng bên dưới.</p>
+                   <button onClick={startCamera} className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-4 py-2 rounded-full hover:bg-indigo-100 transition-colors">
+                       Bật Camera Tablet
+                   </button>
+               </div>
+           )}
+        </div>
+      ) : (
+        // GIAO DIỆN THAO TÁC THỦ CÔNG HIỆN TẠI
+        <>
+          <div className="flex bg-gray-200 p-1 rounded-xl w-full">
+            <button onClick={() => setScanTab('auto')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'auto' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Camera / Ảnh</button>
+            <button onClick={() => setScanTab('manual')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${scanTab === 'manual' ? 'bg-white text-indigo-600 shadow' : 'text-gray-500'}`}>Quét thủ công</button>
+          </div>
+
+          <div className="bg-white rounded-3xl overflow-hidden relative shadow-sm border border-gray-100 aspect-square w-full flex flex-col">
+            {scanTab === 'auto' ? (
+              <div className="w-full h-full relative flex flex-col items-center justify-center bg-gray-50">
+                {autoMode === null ? (
+                    <div className="flex flex-col gap-4 w-3/4">
+                       <button onClick={startCamera} className="bg-indigo-600 text-white p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-700 transition-colors">
+                          <Scan size={32} />
+                          <span className="font-bold">Quét QR trực tiếp</span>
+                       </button>
+                       <div className="relative">
+                          <input type="file" accept="image/*" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
+                          <button onClick={() => fileInputRef.current?.click()} className="w-full bg-white text-indigo-600 border-2 border-indigo-600 p-4 rounded-2xl shadow-sm flex flex-col items-center justify-center gap-2 hover:bg-indigo-50 transition-colors">
+                             <Upload size={32} />
+                             <span className="font-bold">Chọn từ thư viện ảnh</span>
+                          </button>
                        </div>
                     </div>
-                    <button onClick={stopCamera} className="absolute top-4 right-4 bg-black/40 backdrop-blur-md text-white px-3 py-1.5 rounded-lg text-xs font-bold border border-white/20 z-20">Đóng Camera</button>
-                    
-                    {!isScanning && (
-                      <div className="absolute inset-0 bg-white/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center">
-                         <CheckCircle size={60} className="text-emerald-500 mb-4 animate-bounce" />
-                         <h2 className="text-gray-800 text-xl font-bold">Xong!</h2>
-                      </div>
-                    )}
-                </div>
-            )}
-            <div id="qr-reader-hidden" style={{display: 'none'}}></div>
-          </div>
-        ) : (
-          <div className="bg-gray-50 w-full h-full flex flex-col p-4 relative">
-             <h3 className="font-bold text-gray-700 mb-2 shrink-0">Chọn học sinh để điểm danh</h3>
-             <div className="relative mb-3 shrink-0">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input 
-                   type="text" placeholder="Tìm tên hoặc mã HS..." 
-                   className="w-full border border-gray-300 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-sm"
-                   value={manualSearch} onChange={(e) => setManualSearch(e.target.value)}
-                />
-             </div>
-             
-             <div className="flex-1 overflow-y-auto bg-white border border-gray-200 rounded-xl mb-3 shadow-inner">
-                {filteredStudents.length === 0 ? (
-                   <div className="p-4 text-center text-gray-400 text-sm">Không tìm thấy học sinh.</div>
                 ) : (
-                   <ul className="divide-y divide-gray-50">
-                      {filteredStudents.map(s => (
-                         <li 
-                            key={s.id} onClick={() => setManualId(s.id === manualId ? '' : s.id)}
-                            className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${manualId === s.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
-                         >
-                            <div className="text-left">
-                               <div className="font-medium text-gray-800">{s.fullName}</div>
-                               <div className="text-[10px] text-gray-500">{s.studentCode} {s.className ? `(${s.className})` : ''}</div>
-                            </div>
-                            {manualId === s.id && <CheckCircle size={16} className="text-indigo-600 shrink-0" />}
-                         </li>
-                      ))}
-                   </ul>
+                    <div className="w-full h-full relative bg-black overflow-hidden">
+                        <div id="qr-reader-custom" className="w-full h-full absolute inset-0 [&>video]:w-full [&>video]:h-full [&>video]:object-cover"></div>
+                        <div className="absolute inset-0 pointer-events-none z-10 flex items-center justify-center p-4">
+                           <div className="w-full h-full relative border border-white/10 rounded-2xl shadow-[0_0_0_999px_rgba(0,0,0,0.5)]">
+                              <div className="absolute top-0 left-0 w-10 h-10 border-t-4 border-l-4 border-emerald-400 rounded-tl-2xl -ml-[2px] -mt-[2px]"></div>
+                              <div className="absolute top-0 right-0 w-10 h-10 border-t-4 border-r-4 border-emerald-400 rounded-tr-2xl -mr-[2px] -mt-[2px]"></div>
+                              <div className="absolute bottom-0 left-0 w-10 h-10 border-b-4 border-l-4 border-emerald-400 rounded-bl-2xl -ml-[2px] -mb-[2px]"></div>
+                              <div className="absolute bottom-0 right-0 w-10 h-10 border-b-4 border-r-4 border-emerald-400 rounded-br-2xl -mr-[2px] -mb-[2px]"></div>
+                           </div>
+                        </div>
+                        <button onClick={stopCamera} className="absolute top-4 right-4 bg-black/40 backdrop-blur-md text-white px-3 py-1.5 rounded-lg text-xs font-bold border border-white/20 z-20">Đóng Camera</button>
+                    </div>
                 )}
+                <div id="qr-reader-hidden" style={{display: 'none'}}></div>
+              </div>
+            ) : (
+              <div className="bg-gray-50 w-full h-full flex flex-col p-4 relative">
+                 <h3 className="font-bold text-gray-700 mb-2 shrink-0">Chọn học sinh để điểm danh</h3>
+                 <div className="relative mb-3 shrink-0">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input 
+                       type="text" placeholder="Tìm tên hoặc mã HS..." 
+                       className="w-full border border-gray-300 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-sm"
+                       value={manualSearch} onChange={(e) => setManualSearch(e.target.value)}
+                    />
+                 </div>
+                 
+                 <div className="flex-1 overflow-y-auto bg-white border border-gray-200 rounded-xl mb-3 shadow-inner">
+                    {filteredStudents.length === 0 ? (
+                       <div className="p-4 text-center text-gray-400 text-sm">Không tìm thấy học sinh.</div>
+                    ) : (
+                       <ul className="divide-y divide-gray-50">
+                          {filteredStudents.map(s => (
+                             <li 
+                                key={s.id} onClick={() => setManualId(s.id === manualId ? '' : s.id)}
+                                className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${manualId === s.id ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+                             >
+                                <div className="text-left">
+                                   <div className="font-medium text-gray-800">{s.fullName}</div>
+                                   <div className="text-[10px] text-gray-500">{s.studentCode} {s.className ? `(${s.className})` : ''}</div>
+                                </div>
+                                {manualId === s.id && <CheckCircle size={16} className="text-indigo-600 shrink-0" />}
+                             </li>
+                          ))}
+                       </ul>
+                    )}
+                 </div>
+
+                 <button 
+                    onClick={() => manualId && handleScanWithToken(students.find(s=>s.id===manualId)?.qrToken)} 
+                    disabled={!manualId || !isScanning} 
+                    className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold disabled:opacity-50 shrink-0 shadow-sm transition-opacity"
+                 >
+                    {isScanning ? 'Xác nhận Quét' : 'Đang xử lý...'}
+                 </button>
+              </div>
+            )}
+          </div>
+          
+          {/* Lịch sử quét thủ công */}
+          {lastScan && (
+            <div className={`p-4 rounded-2xl border ${lastScan.status === 'success' ? 'bg-emerald-50 border-emerald-200' : 'bg-yellow-50 border-yellow-200'} flex items-center gap-4 shadow-sm animate-in slide-in-from-bottom-4`}>
+              <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center font-bold text-xl text-gray-500 overflow-hidden shrink-0 shadow-sm border border-white">
+                 {lastScan.avatar ? <img src={lastScan.avatar} className="w-full h-full object-cover" /> : lastScan.fullName.charAt(0)}
+              </div>
+              <div className="truncate text-left">
+                <h3 className="text-base font-bold text-gray-900 truncate">{lastScan.fullName}</h3>
+                <p className="text-xs text-gray-600 truncate">{lastScan.className || 'Không có lớp'} | {lastScan.studentCode}</p>
+                <p className={`text-[11px] font-bold mt-1 ${lastScan.status === 'success' ? 'text-emerald-600' : 'text-yellow-600'}`}>
+                  {lastScan.time} - {lastScan.status === 'success' ? 'Thành công' : 'Đã điểm danh'}
+                </p>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* GIAO DIỆN MÀN HÌNH POPUP LỚN (HIỆN LÊN TRÊN CÙNG KHI QUÉT TRONG CHẾ ĐỘ KIOSK) */}
+      {isKioskMode && kioskResult && (
+         <div className={`fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 animate-in zoom-in-95 duration-200
+             ${kioskResult.type === 'success' ? 'bg-emerald-500/90' :
+               kioskResult.type === 'warning' ? 'bg-yellow-500/90' : 'bg-rose-500/90'} backdrop-blur-sm`
+         }>
+             <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-sm flex flex-col items-center text-center">
+                 {kioskResult.type === 'success' && <div className="w-28 h-28 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-6"><CheckCircle size={70} /></div>}
+                 {kioskResult.type === 'warning' && <div className="w-28 h-28 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mb-6"><AlertCircle size={70} /></div>}
+                 {kioskResult.type === 'error' && <div className="w-28 h-28 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-6"><XCircle size={70} /></div>}
+
+                 {kioskResult.student && (
+                     <>
+                         <h2 className="text-3xl font-black text-gray-900 mb-2 leading-tight">{kioskResult.student.fullName}</h2>
+                         <p className="text-base text-gray-500 font-bold mb-6">Lớp: <span className="text-indigo-600">{kioskResult.student.className || 'Không có'}</span> | {kioskResult.student.studentCode}</p>
+                     </>
+                 )}
+
+                 <div className={`w-full py-4 rounded-2xl font-black text-lg
+                     ${kioskResult.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                       kioskResult.type === 'warning' ? 'bg-yellow-50 text-yellow-700 border border-yellow-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`
+                 }>
+                     {kioskResult.message}
+                 </div>
              </div>
-
-             <button 
-                onClick={() => manualId && handleScanWithToken(students.find(s=>s.id===manualId)?.qrToken)} 
-                disabled={!manualId || !isScanning} 
-                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold disabled:opacity-50 shrink-0 shadow-sm transition-opacity"
-             >
-                {isScanning ? 'Xác nhận Quét' : 'Đang xử lý...'}
-             </button>
-          </div>
-        )}
-      </div>
-
-      {lastScan && (
-        <div className={`p-4 rounded-2xl border ${lastScan.status === 'success' ? 'bg-emerald-50 border-emerald-200' : 'bg-yellow-50 border-yellow-200'} flex items-center gap-4 shadow-sm animate-in slide-in-from-bottom-4`}>
-          <div className="w-14 h-14 rounded-full bg-white flex items-center justify-center font-bold text-xl text-gray-500 overflow-hidden shrink-0 shadow-sm border border-white">
-             {lastScan.avatar ? <img src={lastScan.avatar} className="w-full h-full object-cover" /> : lastScan.fullName.charAt(0)}
-          </div>
-          <div className="truncate text-left">
-            <h3 className="text-base font-bold text-gray-900 truncate">{lastScan.fullName}</h3>
-            <p className="text-xs text-gray-600 truncate">{lastScan.className || 'Không có lớp'} | {lastScan.studentCode}</p>
-            <p className={`text-[11px] font-bold mt-1 ${lastScan.status === 'success' ? 'text-emerald-600' : 'text-yellow-600'}`}>
-              {lastScan.time} - {lastScan.status === 'success' ? 'Thành công' : 'Đã điểm danh'}
-            </p>
-          </div>
-        </div>
+         </div>
       )}
     </div>
   );
