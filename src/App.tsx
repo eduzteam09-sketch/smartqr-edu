@@ -784,9 +784,11 @@ function StudentsView({ students, classes, showToast }) {
          margin: 5, 
          filename: fileName,
          image: { type: 'jpeg', quality: 0.98 },
-         html2canvas: { scale: 1.2, useCORS: true, scrollY: 0, windowWidth: 1024, backgroundColor: '#ffffff' },
+         // Khóa cứng cửa sổ chụp ở mức 800px để không bị ảnh hưởng bởi màn hình nhỏ của điện thoại
+         html2canvas: { scale: 1.5, useCORS: true, scrollY: 0, windowWidth: 800, backgroundColor: '#ffffff' },
          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
-         pagebreak: { mode: ['avoid-all', 'css'] }
+         // Bắt buộc thêm dòng này để nhận diện đúng thẻ chia trang
+         pagebreak: { mode: ['css', 'legacy'] } 
        };
        
        try {
@@ -1233,9 +1235,9 @@ function StudentsView({ students, classes, showToast }) {
          </div>
       )}
 
-      {/* KHUNG PRINT: Đã được xử lý chia 6 thẻ/trang và đổi Header */}
-      <div className={isExporting ? "absolute left-0 top-0 w-full bg-white z-[50] pb-20" : "hidden"}>
-         <div ref={printRef} className="w-[190mm] bg-white mx-auto text-black pt-4 pb-8 h-max">
+      {/* KHUNG PRINT: Khóa kích thước tuyệt đối 800px để chống vỡ layout trên điện thoại */}
+      <div className={isExporting ? "absolute left-0 top-0 bg-white z-[50]" : "hidden"} style={{ width: '800px' }}>
+         <div ref={printRef} className="bg-white text-black" style={{ width: '800px', padding: '20px' }}>
             
             {/* THUẬT TOÁN CHIA MẢNG: Mỗi trang 6 học sinh */}
             {studentsToPrint.reduce((resultArray, item, index) => { 
@@ -1245,38 +1247,51 @@ function StudentsView({ students, classes, showToast }) {
                return resultArray;
             }, []).map((chunk, pageIndex, chunkArray) => (
                
-               <div key={`page-${pageIndex}`} className="page-container w-full relative">
-                  {/* Tiêu đề trang: Có thể in ở mọi trang hoặc chỉ trang đầu. (Đang set chỉ trang đầu) */}
+               <div key={`page-${pageIndex}`} style={{ width: '100%', minHeight: '1060px', position: 'relative', backgroundColor: 'white' }}>
+                  
+                  {/* Tiêu đề trang đầu */}
                   {pageIndex === 0 && (
-                      <h1 className="text-2xl font-bold text-center mb-8 uppercase">
+                      <h1 style={{ fontSize: '24px', fontWeight: 'bold', textAlign: 'center', marginBottom: '30px', textTransform: 'uppercase', paddingTop: '20px' }}>
                          Danh sách thẻ học sinh {exportData.className !== 'Tat_Ca' && exportData.className ? `- Lớp ${exportData.className}` : ''}
                       </h1>
                   )}
-                  {/* Khoảng trống bù trừ nếu trang sau không có tiêu đề */}
-                  {pageIndex > 0 && <div className="h-10"></div>}
+                  {/* Cân bằng khoảng trống cho các trang sau */}
+                  {pageIndex > 0 && <div style={{ height: '50px' }}></div>}
 
-                  {/* LƯỚI 6 THẺ */}
-                  <div className="flex flex-wrap gap-[10mm] justify-center">
+                  {/* LƯỚI 6 THẺ: Dùng block và inline-flex để chống đè / lấn khung */}
+                  <div style={{ display: 'block', textAlign: 'center', width: '100%' }}>
                      {chunk.map(student => (
-                        <div key={student.id} style={{ width: '5.4cm', height: '8.6cm' }} className="border-[2px] border-indigo-600 rounded-xl overflow-hidden flex flex-col bg-white shrink-0 box-border mb-[10mm]">
+                        <div key={student.id} style={{ 
+                           display: 'inline-flex', 
+                           flexDirection: 'column',
+                           width: '220px', 
+                           height: '340px', 
+                           margin: '0 10px 20px 10px', 
+                           border: '2px solid #4f46e5', 
+                           borderRadius: '16px', 
+                           overflow: 'hidden',
+                           verticalAlign: 'top',
+                           backgroundColor: '#fff',
+                           boxSizing: 'border-box',
+                           textAlign: 'left'
+                        }}>
                            
-                           {/* HEADER THẺ: Đã đổi sang Hệ thống/Hồ bơi */}
-                           <div className="bg-indigo-600 text-white px-2 py-3 text-center shrink-0 flex flex-col justify-center min-h-[1.5cm]">
-                              <h2 className="font-bold text-[12px] uppercase leading-tight">
-                                 {/* Ưu tiên hiển thị: 1. Điểm hồ bơi -> 2. Tên lớp hệ thống -> 3. Mặc định */}
-                                 {student.swimmingPool || student.systemClassName}
+                           {/* HEADER THẺ */}
+                           <div style={{ backgroundColor: '#4f46e5', color: 'white', padding: '10px 8px', textAlign: 'center', minHeight: '65px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                              <h2 style={{ fontWeight: 'bold', fontSize: '13px', textTransform: 'uppercase', lineHeight: '1.2', margin: 0 }}>
+                                 {student.swimmingPool || student.systemClassName || 'THẺ HỌC SINH'}
                               </h2>
                            </div>
 
                            {/* NỘI DUNG THẺ */}
-                           <div className="p-3 flex flex-col items-center flex-1 w-full text-center">
-                              <h3 className="text-[14px] font-bold text-gray-900 mb-1.5 leading-tight">{student.fullName}</h3>
-                              <p className="text-[11px] text-gray-600 font-medium mb-1">Mã HS: <span className="text-black font-bold">{student.studentCode}</span></p>
-                              <p className="text-[11px] text-gray-600 font-medium mb-3">Lớp: <span className="text-black font-bold">{student.className || 'N/A'}</span></p>
-                              <div className="mt-auto w-full flex items-center justify-center p-1">
+                           <div style={{ padding: '15px', display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
+                              <h3 style={{ fontSize: '16px', fontWeight: 'bold', color: '#111827', marginBottom: '8px', textAlign: 'center', lineHeight: '1.2' }}>{student.fullName}</h3>
+                              <p style={{ fontSize: '12px', color: '#4b5563', fontWeight: '500', marginBottom: '4px', margin: 0 }}>Mã HS: <span style={{ color: '#000', fontWeight: 'bold' }}>{student.studentCode}</span></p>
+                              <p style={{ fontSize: '12px', color: '#4b5563', fontWeight: '500', marginBottom: '12px', margin: 0 }}>Lớp: <span style={{ color: '#000', fontWeight: 'bold' }}>{student.className || 'N/A'}</span></p>
+                              <div style={{ marginTop: 'auto', width: '100%', display: 'flex', justifyContent: 'center' }}>
                                  <img 
                                     src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${student.qrToken}&margin=0`} 
-                                    className="w-[3.6cm] h-[3.6cm] object-contain"
+                                    style={{ width: '140px', height: '140px', objectFit: 'contain' }}
                                     crossOrigin="anonymous"
                                     alt="QR"
                                  />
@@ -1286,7 +1301,7 @@ function StudentsView({ students, classes, showToast }) {
                      ))}
                   </div>
 
-                  {/* THẺ ĐIỀU HƯỚNG NGẮT TRANG PDF (Ngoại trừ trang cuối cùng) */}
+                  {/* THẺ ĐIỀU HƯỚNG NGẮT TRANG PDF */}
                   {pageIndex < chunkArray.length - 1 && (
                      <div className="html2pdf__page-break"></div>
                   )}
