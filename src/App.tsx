@@ -1712,8 +1712,11 @@ function ScannerView({ students, attendance, user, showToast }) {
       
       {/* NÚT CHUYỂN ĐỔI CHẾ ĐỘ KIOSK */}
       <div className="flex justify-end mb-2">
-          <button 
-              onClick={() => setIsKioskMode(!isKioskMode)}
+          <button
+              onClick={(e) => { 
+                  setIsKioskMode(!isKioskMode); 
+                  e.currentTarget.blur(); 
+              }}
               className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-2 border ${isKioskMode ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200'}`}
           >
               {isKioskMode ? 'Đóng chế độ Kiosk' : 'Mở Kiosk (Trạm Quét Tự Động)'}
