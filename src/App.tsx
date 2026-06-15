@@ -1546,7 +1546,7 @@ function ScannerView({ students, attendance, user, showToast }) {
   const [manualSearch, setManualSearch] = useState('');
   const [manualId, setManualId] = useState('');
 
-  // STATE MỚI CHO TRẠM QUÉT (KIOSK MODE)
+  // STATE KIOSK MODE
   const [isKioskMode, setIsKioskMode] = useState(false);
   const [kioskResult, setKioskResult] = useState(null);
 
@@ -1612,7 +1612,7 @@ function ScannerView({ students, attendance, user, showToast }) {
     if (!user || !token) return;
     setIsScanning(false);
     
-    // Xóa bộ đếm thời gian cũ nếu quét liên tục quá nhanh
+    // NẾU CÓ QR MỚI: Xóa bộ đếm thời gian cũ để ngay lập tức hiển thị QR mới
     if (kioskTimeoutRef.current) clearTimeout(kioskTimeoutRef.current);
 
     // Phát âm thanh tiếng Bíp khi máy bắt được mã
@@ -1627,7 +1627,8 @@ function ScannerView({ students, attendance, user, showToast }) {
     if (!student) {
       setKioskResult({ type: 'error', message: 'MÃ THẺ KHÔNG TỒN TẠI' });
       showToast('Mã QR không hợp lệ!', 'error');
-      kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 3000);
+      // Set lại 5 giây
+      kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 5000);
       return;
     }
 
@@ -1654,8 +1655,8 @@ function ScannerView({ students, attendance, user, showToast }) {
       }
     }
 
-    // Đóng Popup lớn và đưa màn hình về trạng thái chờ quét tiếp sau 3 giây
-    kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 3000);
+    // Đóng Popup lớn và đưa màn hình về trạng thái chờ quét tiếp sau 5 giây
+    kioskTimeoutRef.current = setTimeout(() => { setIsScanning(true); setKioskResult(null); }, 5000);
   };
 
   const startCamera = () => {
@@ -1669,7 +1670,8 @@ function ScannerView({ students, attendance, user, showToast }) {
                   { fps: 10, aspectRatio: 1.0 },
                   (decodedText) => {
                       const now = Date.now();
-                      if (lastScannedRef.current.token === decodedText && now - lastScannedRef.current.time < 3000) return; 
+                      // Tối ưu: Chặn camera quét liên tục cùng 1 mã trong 5s. Nhưng mã KHÁC thì vẫn nhận ngay lập tức!
+                      if (lastScannedRef.current.token === decodedText && now - lastScannedRef.current.time < 5000) return; 
                       lastScannedRef.current = { token: decodedText, time: now };
                       handleScanWithToken(decodedText);
                   },
