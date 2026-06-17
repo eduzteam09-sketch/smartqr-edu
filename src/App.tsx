@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, where } from 'firebase/firestore';
-import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp } from 'lucide-react';
+import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp, Download, Archive } from 'lucide-react';
 
 // ==========================================
 // CẤU HÌNH FIREBASE THEO CHUẨN MÔI TRƯỜNG
@@ -711,7 +711,11 @@ function StudentsView({ students, classes, showToast }) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [studentDetails, setStudentDetails] = useState(null);
-  const [newStudent, setNewStudent] = useState({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '', admissionDate: '' });
+  const [newStudent, setNewStudent] = useState({ 
+   fullName: '', className: '', studentCode: '', avatar: '', school: '', 
+   parentPhone: '', swimmingPool: '', admissionDate: '', 
+   swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '' 
+   });
   const [selectedCard, setSelectedCard] = useState(null);
   const [searchQuery, setSearchQuery] = useState(''); // State tìm kiếm học sinh
   const fileInputRef = useRef(null);
@@ -723,6 +727,13 @@ function StudentsView({ students, classes, showToast }) {
   const [studentToDelete, setStudentToDelete] = useState(null); // State quản lý modal xác nhận xóa
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportData, setExportData] = useState({ classId: null, className: '' });
+  const [showProfileZipModal, setShowProfileZipModal] = useState(false);
+  const [isExportingZip, setIsExportingZip] = useState(false);
+  const [exportZipProgress, setExportZipProgress] = useState({ current: 0, total: 0 });
+  // THÊM ĐOẠN NÀY: Tự động gom nhóm các điểm hồ bơi đã có trong data
+  const defaultPools = ["Hồ bơi Tiểu học Võ Trường Toản", "Hồ bơi Tiểu học An Bình"];
+  const existingPools = students.map(s => s.swimmingPool).filter(Boolean);
+  const poolOptions = [...new Set([...defaultPools, ...existingPools])]; // Dùng Set để loại bỏ trùng lặp
 
   // Sửa đoạn này ở phía trên cùng của giao diện StudentsView
   const studentsToPrint = exportData.classId === 'all' 
@@ -742,6 +753,17 @@ function StudentsView({ students, classes, showToast }) {
       const scriptPdf = document.createElement('script');
       scriptPdf.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
       document.body.appendChild(scriptPdf);
+    }
+    // THÊM ĐOẠN NÀY ĐỂ TẢI JSZIP & FILESAVER
+    if (!window.JSZip) {
+      const scriptZip = document.createElement('script');
+      scriptZip.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+      document.body.appendChild(scriptZip);
+    }
+    if (!window.saveAs) {
+      const scriptSaver = document.createElement('script');
+      scriptSaver.src = "https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js";
+      document.body.appendChild(scriptSaver);
     }
   }, []);
   
@@ -834,7 +856,11 @@ function StudentsView({ students, classes, showToast }) {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'students'), {
         ...newStudent, studentCode: finalStudentCode, qrToken, createdAt: Date.now(), totalAttendance: 0 // Khởi tạo số buổi = 0
       });
-      setNewStudent({ fullName: '', className: '', studentCode: '', avatar: '', school: '', parentPhone: '', swimmingPool: '', admissionDate: '' });
+      setNewStudent({ 
+         fullName: '', className: '', studentCode: '', avatar: '', school: '', 
+         parentPhone: '', swimmingPool: '', admissionDate: '', 
+         swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '' 
+      });
       setIsAdding(false);
       showToast('Thêm học sinh thành công!');
     } catch (error) { showToast('Lỗi khi thêm', 'error'); }
@@ -904,6 +930,157 @@ function StudentsView({ students, classes, showToast }) {
     }
   };
 
+   const handleExportProfilePDF = () => {
+    if (!studentDetails) return;
+    
+    if (!window.html2pdf) {
+      showToast('Công cụ tạo PDF đang tải, vui lòng thử lại sau vài giây!', 'error');
+      return;
+    }
+
+    // Tạo một khung HTML ẩn chứa giao diện hồ sơ để xuất PDF (sử dụng style inline chuẩn CSS)
+    const element = document.createElement('div');
+    element.innerHTML = `
+        <div style="font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto;">
+            <div style="text-align: center; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px;">
+                <h1 style="color: #4f46e5; margin: 0 0 10px 0; font-size: 24px;">HỒ SƠ HỌC SINH</h1>
+                <h2 style="margin:0; font-size: 22px;">${studentDetails.fullName}</h2>
+                <p style="color:#666; margin-top:5px;">Mã HS: ${studentDetails.studentCode}</p>
+            </div>
+            
+            <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">THÔNG TIN CƠ BẢN</h3>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Trường học:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.school || '-'}</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Lớp:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.className || '-'}</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">SĐT Phụ huynh:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.parentPhone || '-'}</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày nhập học:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.admissionDate ? new Date(studentDetails.admissionDate).toLocaleDateString('vi-VN') : '-'}</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Điểm hồ bơi:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.swimmingPool || '-'}</span></div>
+
+            <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">QUÁ TRÌNH HỌC TẬP</h3>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Chuyên cần (đã học):</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.totalAttendance || 0} buổi</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Số buổi bé biết bơi:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.swimSuccessSessions ? studentDetails.swimSuccessSessions + ' buổi' : 'Chưa cập nhật'}</span></div>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày kết thúc khóa:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.endDate ? new Date(studentDetails.endDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span></div>
+            
+            <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">KIỂM TRA KỸ THUẬT BƠI</h3>
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Xếp loại:</span> <span style="font-weight: bold; color: #059669; width: 60%; text-align: right;">${studentDetails.swimGrade || 'Chưa xếp loại'}</span></div>
+            <div style="background: #f9fafb; padding: 15px; border-radius: 8px; margin-top: 10px; font-style: italic;">
+                <strong style="color:#4f46e5;">Nhận xét của giáo viên:</strong><br/>
+                ${studentDetails.teacherComment || 'Chưa có nhận xét.'}
+            </div>
+        </div>
+    `;
+
+    // Cấu hình xuất file PDF
+    const opt = {
+      margin:       10, // Căn lề giấy
+      filename:     `Ho_So_${studentDetails.studentCode}_${studentDetails.fullName}.pdf`,
+      image:        { type: 'jpeg', quality: 0.98 },
+      html2canvas:  { scale: 2, useCORS: true },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+    };
+
+    showToast('Đang xử lý xuất file PDF...');
+    
+    window.html2pdf().set(opt).from(element).save()
+      .then(() => {
+         showToast('Đã lưu file PDF thành công!');
+      })
+      .catch((e) => {
+         console.error(e);
+         showToast('Có lỗi xảy ra khi tạo PDF', 'error');
+      });
+  };
+
+  const executeExportProfileZip = async (clsId, clsName) => {
+      if (!window.JSZip || !window.saveAs || !window.html2pdf) {
+          showToast('Công cụ đang tải, vui lòng chờ vài giây rồi thử lại...', 'error');
+          return;
+      }
+
+      const targetStudents = clsId === 'all' ? students : students.filter(s => s.classId === clsId);
+      if (targetStudents.length === 0) {
+          showToast('Không có học sinh nào trong danh sách!', 'error');
+          return;
+      }
+
+      setShowProfileZipModal(false);
+      setIsExportingZip(true);
+      setExportZipProgress({ current: 0, total: targetStudents.length });
+
+      const zip = new window.JSZip();
+      const safeClassName = clsName.replace(/[^a-zA-Z0-9_]/g, '_');
+      const folderName = clsId === 'all' ? 'Ho_So_Tat_Ca_HS' : `Ho_So_Lop_${safeClassName}`;
+      const folder = zip.folder(folderName);
+
+      // Tạo một div ẩn để render HTML sang PDF
+      const container = document.createElement('div');
+      container.style.position = 'absolute';
+      container.style.left = '-9999px';
+      container.style.top = '-9999px';
+      document.body.appendChild(container);
+
+      try {
+          for (let i = 0; i < targetStudents.length; i++) {
+              const student = targetStudents[i];
+              setExportZipProgress({ current: i + 1, total: targetStudents.length });
+
+              const element = document.createElement('div');
+              element.innerHTML = `
+                  <div style="font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto; background: white;">
+                      <div style="text-align: center; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px;">
+                          <h1 style="color: #4f46e5; margin: 0 0 10px 0; font-size: 24px;">HỒ SƠ HỌC SINH</h1>
+                          <h2 style="margin:0; font-size: 22px;">${student.fullName}</h2>
+                          <p style="color:#666; margin-top:5px;">Mã HS: ${student.studentCode}</p>
+                      </div>
+                      <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px;">THÔNG TIN CƠ BẢN</h3>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Trường học:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.school || '-'}</span></div>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Lớp:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.className || '-'}</span></div>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">SĐT Phụ huynh:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.parentPhone || '-'}</span></div>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày nhập học:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.admissionDate ? new Date(student.admissionDate).toLocaleDateString('vi-VN') : '-'}</span></div>
+                      
+                      <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px;">QUÁ TRÌNH HỌC TẬP</h3>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Chuyên cần:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.totalAttendance || 0} buổi</span></div>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Số buổi bé biết bơi:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.swimSuccessSessions ? student.swimSuccessSessions + ' buổi' : 'Chưa cập nhật'}</span></div>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày kết thúc khóa:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.endDate ? new Date(student.endDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span></div>
+                      
+                      <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px;">KIỂM TRA KỸ THUẬT BƠI</h3>
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Xếp loại:</span> <span style="font-weight: bold; color: #059669; width: 60%; text-align: right;">${student.swimGrade || 'Chưa xếp loại'}</span></div>
+                      <div style="background: #f9fafb; padding: 15px; border-radius: 8px; margin-top: 10px; font-style: italic;">
+                          <strong style="color:#4f46e5;">Nhận xét của giáo viên:</strong><br/>
+                          ${student.teacherComment || 'Chưa có nhận xét.'}
+                      </div>
+                  </div>
+              `;
+              container.innerHTML = '';
+              container.appendChild(element);
+
+              const opt = {
+                  margin: 10,
+                  filename: `dummy.pdf`,
+                  image: { type: 'jpeg', quality: 0.98 },
+                  html2canvas: { scale: 2, useCORS: true },
+                  jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+              };
+
+              // Tạo PDF và ép kiểu thành file Blob (dữ liệu thô) để nhét vào ZIP
+              const pdfBlob = await window.html2pdf().set(opt).from(element).toPdf().get('pdf').then(pdf => pdf.output('blob'));
+              const safeFileName = `${student.studentCode}_${student.fullName.replace(/[^a-zA-Z0-9\s]/g, '')}.pdf`;
+              folder.file(safeFileName, pdfBlob);
+          }
+
+          showToast('Đang nén thành file ZIP...');
+          const content = await zip.generateAsync({ type: "blob" });
+          window.saveAs(content, `${folderName}.zip`);
+          showToast('Đã tải xuống file ZIP thành công!');
+
+      } catch (err) {
+          console.error(err);
+          showToast('Lỗi khi đóng gói hồ sơ', 'error');
+      } finally {
+          document.body.removeChild(container);
+          setIsExportingZip(false);
+      }
+  };
+
   // Logic lọc danh sách học sinh theo ô tìm kiếm
   const filteredStudents = students.filter(s => {
       if (!searchQuery) return true;
@@ -914,21 +1091,26 @@ function StudentsView({ students, classes, showToast }) {
   return (
     <div className="space-y-4 animate-in fade-in">
       {/* Mobile Tools Menu */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
          <button onClick={() => {setIsAdding(!isAdding); setEditingStudent(null);}} className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-indigo-600">
             <UserPlus size={20} className="mb-1"/>
-            <span className="text-[10px] font-bold">Thêm HS</span>
+            <span className="text-[10px] font-bold text-center">Thêm HS</span>
          </button>
          <div className="relative">
             <input type="file" accept=".xlsx, .xls" className="hidden" ref={fileInputRef} onChange={handleImportExcel} />
             <button onClick={() => fileInputRef.current?.click()} disabled={isImporting} className="w-full flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-emerald-600 disabled:opacity-50">
                {isImporting ? <Loader2 size={20} className="animate-spin mb-1"/> : <Upload size={20} className="mb-1"/>}
-               <span className="text-[10px] font-bold">Nhập Excel</span>
+               <span className="text-[10px] font-bold text-center">Nhập Excel</span>
             </button>
          </div>
          <button onClick={() => setShowExportModal(true)} disabled={isExporting} className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-rose-600 disabled:opacity-50">
             {isExporting ? <Loader2 size={20} className="animate-spin mb-1"/> : <Printer size={20} className="mb-1"/>}
-            <span className="text-[10px] font-bold">Xuất thẻ (PDF)</span>
+            <span className="text-[10px] font-bold text-center">Thẻ (PDF)</span>
+         </button>
+         {/* NÚT XUẤT HỒ SƠ ZIP */}
+         <button onClick={() => setShowProfileZipModal(true)} disabled={isExportingZip} className="flex flex-col items-center justify-center p-3 bg-white rounded-xl border shadow-sm text-blue-600 disabled:opacity-50">
+            {isExportingZip ? <Loader2 size={20} className="animate-spin mb-1"/> : <Archive size={20} className="mb-1"/>}
+            <span className="text-[10px] font-bold text-center">Hồ sơ (ZIP)</span>
          </button>
       </div>
 
@@ -975,18 +1157,51 @@ function StudentsView({ students, classes, showToast }) {
 
           <div className="grid grid-cols-2 gap-2">
              <div>
-                 <label className="block text-[10px] font-bold text-gray-500 mb-1">ĐIỂM HỒ BƠI</label>
-                 <select value={editingStudent ? editingStudent.swimmingPool : newStudent.swimmingPool} onChange={e => editingStudent ? setEditingStudent({...editingStudent, swimmingPool: e.target.value}) : setNewStudent({...newStudent, swimmingPool: e.target.value})} className="w-full border rounded-lg p-2 text-sm bg-white outline-none">
-                     <option value="">-- Chọn điểm bơi --</option>
-                     <option value="Hồ bơi Tiểu học Võ Trường Toản">Hồ bơi Tiểu học Võ Trường Toản</option>
-                     <option value="Hồ bơi Tiểu học An Bình">Hồ bơi Tiểu học An Bình</option>
-                 </select>
-             </div>
+               <label className="block text-[10px] font-bold text-gray-500 mb-1">ĐIỂM HỒ BƠI</label>
+               <input 
+                  list="pool-options" 
+                  value={editingStudent ? editingStudent.swimmingPool || '' : newStudent.swimmingPool} 
+                  onChange={e => editingStudent ? setEditingStudent({...editingStudent, swimmingPool: e.target.value}) : setNewStudent({...newStudent, swimmingPool: e.target.value})} 
+                  className="w-full border rounded-lg p-2 text-sm bg-white outline-none focus:ring-1 focus:ring-indigo-500" 
+                  placeholder="Chọn hoặc nhập điểm hồ bơi mới..." 
+               />
+               <datalist id="pool-options">
+                  {poolOptions.map((pool, index) => (
+                        <option key={index} value={pool} />
+                  ))}
+               </datalist>
+            </div>
              <div>
                  <label className="block text-[10px] font-bold text-gray-500 mb-1">NGÀY NHẬP HỌC</label>
                  <input type="date" value={editingStudent ? editingStudent.admissionDate || '' : newStudent.admissionDate} onChange={e => editingStudent ? setEditingStudent({...editingStudent, admissionDate: e.target.value}) : setNewStudent({...newStudent, admissionDate: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 bg-white" />
              </div>
           </div>
+          {/* --- CÁC TRƯỜNG THÔNG TIN ĐÁNH GIÁ (CHỈ HIỂN THỊ KHI SỬA) --- */}
+          {editingStudent && (
+             <>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-100 mt-2">
+                   <div>
+                       <label className="block text-[10px] font-bold text-gray-500 mb-1">SỐ BUỔI BIẾT BƠI</label>
+                       {/* Vì đã bọc trong editingStudent nên ta có thể bỏ check điều kiện newStudent ở đây cho gọn */}
+                       <input type="number" value={editingStudent.swimSuccessSessions || ''} onChange={e => setEditingStudent({...editingStudent, swimSuccessSessions: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500" placeholder="VD: 12" />
+                   </div>
+                   <div>
+                       <label className="block text-[10px] font-bold text-gray-500 mb-1">NGÀY KẾT THÚC KHÓA</label>
+                       <input type="date" value={editingStudent.endDate || ''} onChange={e => setEditingStudent({...editingStudent, endDate: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 bg-white" />
+                   </div>
+                </div>
+                
+                <div className="bg-indigo-50/50 p-2 rounded-lg border border-indigo-50 mt-2">
+                   <label className="block text-[10px] font-bold text-indigo-700 mb-2">KIỂM TRA KỸ THUẬT BƠI</label>
+                   <div className="space-y-2">
+                       <input type="text" value={editingStudent.swimGrade || ''} onChange={e => setEditingStudent({...editingStudent, swimGrade: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500" placeholder="Xếp loại (VD: Giỏi, Khá, Đạt...)" />
+                       
+                       <textarea value={editingStudent.teacherComment || ''} onChange={e => setEditingStudent({...editingStudent, teacherComment: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 min-h-[60px]" placeholder="Nhận xét của giáo viên..."></textarea>
+                   </div>
+                </div>
+             </>
+          )}
+          {/* --- KẾT THÚC --- */}
           
           <div className="flex gap-2 pt-2">
              <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">{editingStudent ? 'Lưu' : 'Thêm'}</button>
@@ -1066,10 +1281,6 @@ function StudentsView({ students, classes, showToast }) {
                       <span className="font-bold text-gray-800">{studentDetails.className || '-'}</span>
                    </div>
                    <div className="flex justify-between border-b border-gray-50 pb-2">
-                      <span className="text-gray-500">Lớp hệ thống (HT)</span>
-                      <span className="font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-full">{studentDetails.systemClassName || 'Chưa xếp'}</span>
-                   </div>
-                   <div className="flex justify-between border-b border-gray-50 pb-2">
                       <span className="text-gray-500">Trường học</span>
                       <span className="font-medium text-gray-800 text-right">{studentDetails.school || '-'}</span>
                    </div>
@@ -1078,19 +1289,56 @@ function StudentsView({ students, classes, showToast }) {
                       <span className="font-medium text-blue-600">{studentDetails.parentPhone || '-'}</span>
                    </div>
                    <div className="flex justify-between border-b border-gray-50 pb-2">
-                      <span className="text-gray-500">Ngày nhập học</span>
-                      <span className="font-medium text-gray-800 text-right">
-                         {studentDetails.admissionDate ? new Date(studentDetails.admissionDate).toLocaleDateString('vi-VN') : '-'}
-                      </span>
+                      <span className="text-gray-500">Điểm bơi đăng ký</span>
+                      <span className="font-medium text-emerald-600">{studentDetails.swimmingPool || 'Chưa đăng ký'}</span>
                    </div>
-                   <div className="flex flex-col gap-1 pt-1">
-                      <span className="text-gray-500">Điểm hồ bơi đăng ký:</span>
-                      <span className="font-medium text-emerald-600 bg-emerald-50 p-2 rounded-lg text-center">{studentDetails.swimmingPool || 'Chưa đăng ký'}</span>
+
+                   {/* --- THÔNG TIN QUÁ TRÌNH HỌC TẬP --- */}
+                   <div className="bg-gray-50 rounded-xl p-3 space-y-2 mt-4 border border-gray-100">
+                       <div className="flex justify-between items-center">
+                          <span className="text-gray-600 text-xs font-bold uppercase">Chuyên cần (Đã học)</span>
+                          <span className="font-black text-indigo-600 text-lg">{studentDetails.totalAttendance || 0} <span className="text-xs font-medium text-gray-500">buổi</span></span>
+                       </div>
+                       <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                          <span className="text-gray-600 text-xs">Số buổi bé biết bơi</span>
+                          <span className="font-bold text-gray-800">{studentDetails.swimSuccessSessions ? `${studentDetails.swimSuccessSessions} buổi` : '-'}</span>
+                       </div>
+                       <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                          <span className="text-gray-600 text-xs">Ngày nhập học</span>
+                          <span className="font-bold text-gray-800">{studentDetails.admissionDate ? new Date(studentDetails.admissionDate).toLocaleDateString('vi-VN') : '-'}</span>
+                       </div>
+                       <div className="flex justify-between items-center pt-2 border-t border-gray-200">
+                          <span className="text-gray-600 text-xs">Ngày kết thúc khóa</span>
+                          <span className="font-bold text-gray-800">{studentDetails.endDate ? new Date(studentDetails.endDate).toLocaleDateString('vi-VN') : '-'}</span>
+                       </div>
+                   </div>
+
+                   {/* --- THÔNG TIN KIỂM TRA KỸ THUẬT BƠI --- */}
+                   <div className="bg-indigo-50/50 rounded-xl p-3 mt-2 border border-indigo-50">
+                       <h5 className="text-[10px] font-bold text-indigo-600 mb-2 uppercase">Kiểm tra kỹ thuật bơi</h5>
+                       <div className="flex justify-between mb-1">
+                           <span className="text-gray-600 text-xs">Xếp loại:</span>
+                           <span className="font-bold text-emerald-600">{studentDetails.swimGrade || 'Chưa xếp loại'}</span>
+                       </div>
+                       <div className="mt-2">
+                           <span className="text-gray-600 text-xs block mb-1">Nhận xét của giáo viên:</span>
+                           <p className="text-xs text-gray-800 bg-white p-2 rounded border border-indigo-100 italic">
+                               {studentDetails.teacherComment || 'Chưa có nhận xét.'}
+                           </p>
+                       </div>
                    </div>
                 </div>
              </div>
-             <div className="p-3 border-t bg-gray-50">
-                <button onClick={() => setStudentDetails(null)} className="w-full py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold shadow-sm">Đóng</button>
+             
+             {/* NÚT THAO TÁC Ở ĐÁY POPUP */}
+             <div className="p-3 border-t bg-white flex gap-2">
+                <button onClick={handleExportProfilePDF} className="flex flex-col items-center justify-center w-[72px] bg-rose-50 text-rose-600 rounded-lg text-[10px] font-bold hover:bg-rose-100 transition-colors shrink-0">
+                    <Download size={18} className="mb-0.5" />
+                    Xuất PDF
+                </button>
+                <button onClick={() => setStudentDetails(null)} className="flex-1 py-2.5 bg-gray-900 hover:bg-black transition-colors text-white rounded-lg text-sm font-bold shadow-sm">
+                    Đóng hồ sơ
+                </button>
              </div>
           </div>
         </div>
@@ -1290,6 +1538,59 @@ function StudentsView({ students, classes, showToast }) {
             ))}
          </div>
       </div>
+      {/* POPUP CHỌN LỚP XUẤT HỒ SƠ ZIP */}
+      {showProfileZipModal && (
+        <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[80vh] overflow-hidden animate-in zoom-in-95 duration-200">
+             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                 <h3 className="font-bold text-gray-800">Chọn lớp xuất Hồ sơ (ZIP)</h3>
+                 <button onClick={() => setShowProfileZipModal(false)} className="text-gray-400 hover:text-gray-700 font-bold px-2">&times;</button>
+             </div>
+             <div className="p-4 flex-1 overflow-y-auto">
+                 <ul className="space-y-2">
+                     <li onClick={() => executeExportProfileZip('all', 'Tat_Ca')} className="p-3 border rounded-xl hover:bg-blue-50 hover:border-blue-200 cursor-pointer transition-colors flex justify-between items-center">
+                         <span className="font-bold text-blue-600">Tất cả học sinh</span>
+                         <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded-lg font-bold">{students.length} HS</span>
+                     </li>
+                     {classes && classes.length > 0 ? classes.map(cls => {
+                        const count = students.filter(s => s.classId === cls.id).length;
+                        return (
+                             <li key={cls.id} onClick={() => executeExportProfileZip(cls.id, cls.name)} className="p-3 border rounded-xl hover:bg-indigo-50 hover:border-indigo-200 cursor-pointer transition-colors flex justify-between items-center mb-2">
+                                <div>
+                                   <div className="font-bold text-gray-800">{cls.name}</div>
+                                   <div className="text-[10px] text-gray-500">{cls.classCode}</div>
+                                </div>
+                                <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-bold">{count} HS</span>
+                             </li>
+                        )
+                     }) : (
+                        <div className="text-center text-sm text-gray-500 py-4">Chưa có lớp học nào.</div>
+                     )}
+                 </ul>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MÀN HÌNH LOADING KHI XUẤT ZIP */}
+      {isExportingZip && (
+         <div className="fixed inset-0 bg-white/95 backdrop-blur-sm z-[100] flex flex-col items-center justify-center p-4">
+            <div className="relative mb-6 flex items-center justify-center">
+                <Loader2 className="animate-spin text-blue-600 absolute" size={64} />
+                <Archive className="text-blue-600" size={24} />
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 text-center mb-2">Đang xử lý hồ sơ PDF...</h2>
+            <div className="w-full max-w-xs bg-gray-200 rounded-full h-2.5 mb-2 mt-4">
+               <div className="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style={{ width: `${(exportZipProgress.current / exportZipProgress.total) * 100}%` }}></div>
+            </div>
+            <p className="text-sm font-bold text-blue-600 text-center mb-4">
+               {exportZipProgress.current} / {exportZipProgress.total} hồ sơ
+            </p>
+            <p className="text-xs text-gray-500 text-center max-w-sm px-4">
+               Hệ thống đang vẽ và nén từng file. Vui lòng không đóng trình duyệt lúc này.
+            </p>
+         </div>
+      )}
     </div>
   );
 }
