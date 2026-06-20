@@ -726,7 +726,11 @@ function StudentsView({ students, classes, showToast }) {
   const [visibleCount, setVisibleCount] = useState(15);
   const [studentToDelete, setStudentToDelete] = useState(null); // State quản lý modal xác nhận xóa
   const [showExportModal, setShowExportModal] = useState(false);
-  const [exportData, setExportData] = useState({ classId: null, className: '' });
+  const [exportData, setExportData] = useState({ mode: 'byClass', classId: null, className: '', startIndex: 0, endIndex: 9999, customIds: [] });
+  // Các state mới cho tính năng in thẻ thủ công
+  const [printTab, setPrintTab] = useState('byClass'); // 'byClass' (Theo lớp) hoặc 'custom' (Thủ công)
+  const [selectedForPrint, setSelectedForPrint] = useState([]);
+  const [printSearchQuery, setPrintSearchQuery] = useState('');
   const [showProfileZipModal, setShowProfileZipModal] = useState(false);
   const [isExportingZip, setIsExportingZip] = useState(false);
   const [exportZipProgress, setExportZipProgress] = useState({ current: 0, total: 0 });
@@ -736,11 +740,13 @@ function StudentsView({ students, classes, showToast }) {
   const poolOptions = [...new Set([...defaultPools, ...existingPools])]; // Dùng Set để loại bỏ trùng lặp
 
   // Sửa đoạn này ở phía trên cùng của giao diện StudentsView
-  const studentsToPrint = exportData.classId === 'all' 
-      ? students.slice(exportData.startIndex, exportData.endIndex)
-      : exportData.classId 
-          ? students.filter(s => s.classId === exportData.classId).slice(exportData.startIndex, exportData.endIndex)
-          : [];
+  const studentsToPrint = exportData.mode === 'custom'
+      ? students.filter(s => exportData.customIds.includes(s.id))
+      : exportData.classId === 'all' 
+          ? students.slice(exportData.startIndex, exportData.endIndex)
+          : exportData.classId 
+              ? students.filter(s => s.classId === exportData.classId).slice(exportData.startIndex, exportData.endIndex)
+              : [];
 
   // Thêm useEffect để tự động tải thư viện Excel và PDF khi mở trang
   useEffect(() => {
@@ -778,7 +784,7 @@ function StudentsView({ students, classes, showToast }) {
     }
 
     // 2. Cập nhật State để khung Print render đúng nhóm học sinh đang chọn
-    setExportData({ classId: clsId, className: clsName, startIndex, endIndex });
+    setExportData({ mode: 'byClass', classId: clsId, className: clsName, startIndex, endIndex, customIds: [] });
     setShowExportModal(false);
     setIsExporting(true);
     showToast(`Đang xử lý thẻ từ ${startIndex + 1} đến ${Math.min(endIndex, baseStudents.length)}...`);
@@ -803,11 +809,10 @@ function StudentsView({ students, classes, showToast }) {
           : `The_QR_${safeClassName}_Phan_${startIndex + 1}_den_${Math.min(endIndex, baseStudents.length)}.pdf`;
 
        const opt = {
-         margin: 0, // Đặt lề 0 vì chúng ta sẽ tự căn lề bằng DOM
+         margin: 0,
          filename: fileName,
          image: { type: 'jpeg', quality: 0.98 },
          html2canvas: { scale: 1.5, useCORS: true, scrollY: 0, windowWidth: 800, backgroundColor: '#ffffff' },
-         // Ép khổ giấy PDF khớp chính xác từng pixel với thẻ DOM (Tỷ lệ chuẩn A4)
          jsPDF: { unit: 'px', format: [800, 1131], orientation: 'portrait' } 
        };
        
@@ -820,13 +825,65 @@ function StudentsView({ students, classes, showToast }) {
        } finally { 
           // 5. Dọn dẹp và khôi phục lại giao diện như ban đầu
           setIsExporting(false); 
-          setExportData({ classId: null, className: '', startIndex: 0, endIndex: 9999 }); 
+          setExportData({ mode: 'byClass', classId: null, className: '', startIndex: 0, endIndex: 9999, customIds: [] }); 
           if (appContainer) {
              appContainer.classList.add('h-screen', 'overflow-hidden');
              appContainer.classList.remove('min-h-screen');
           }
        }
     }, 3500); 
+  };
+
+  // --- THÊM 2 HÀM MỚI NÀY NGAY DƯỚI HÀM executeExport ---
+  const togglePrintSelection = (id) => {
+      setSelectedForPrint(prev => 
+          prev.includes(id) ? prev.filter(sId => sId !== id) : [...prev, id]
+      );
+  };
+
+  const executeCustomExport = () => {
+      if (selectedForPrint.length === 0) return;
+      
+      setExportData({ mode: 'custom', classId: null, className: 'Tuy_Chon', startIndex: 0, endIndex: 9999, customIds: selectedForPrint });
+      setShowExportModal(false);
+      setIsExporting(true);
+      showToast(`Đang xử lý ${selectedForPrint.length} thẻ tùy chọn...`);
+      
+      window.scrollTo(0, 0);
+      const appContainer = document.querySelector('.h-screen.overflow-hidden');
+      if (appContainer) {
+         appContainer.classList.remove('h-screen', 'overflow-hidden');
+         appContainer.classList.add('min-h-screen');
+      }
+
+      setTimeout(async () => {
+         const element = printRef.current;
+         const fileName = `The_QR_Tuy_Chon_${Date.now()}.pdf`;
+
+         const opt = {
+           margin: 0,
+           filename: fileName,
+           image: { type: 'jpeg', quality: 0.98 },
+           html2canvas: { scale: 1.5, useCORS: true, scrollY: 0, windowWidth: 800, backgroundColor: '#ffffff' },
+           jsPDF: { unit: 'px', format: [800, 1131], orientation: 'portrait' } 
+         };
+         
+         try {
+            await window.html2pdf().set(opt).from(element).save();
+            showToast(`Đã xuất PDF thành công!`);
+         } catch(e) { 
+            console.error(e);
+            showToast('Lỗi xuất PDF', 'error'); 
+         } finally { 
+            setIsExporting(false); 
+            setExportData({ mode: 'byClass', classId: null, className: '', startIndex: 0, endIndex: 9999, customIds: [] }); 
+            setSelectedForPrint([]); // Reset danh sách sau khi in
+            if (appContainer) {
+               appContainer.classList.add('h-screen', 'overflow-hidden');
+               appContainer.classList.remove('min-h-screen');
+            }
+         }
+      }, 3500); 
   };
 
   const handleUpdateStudent = async (e) => {
@@ -1388,83 +1445,142 @@ function StudentsView({ students, classes, showToast }) {
         </div>
       )}
 
-      {/* POPUP CHỌN LỚP XUẤT PDF */}
+      {/* POPUP CHỌN LỚP/HỌC SINH XUẤT PDF */}
       {showExportModal && (
         <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[80vh] overflow-hidden animate-in zoom-in-95 duration-200">
-             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                 <h3 className="font-bold text-gray-800">Chọn lớp xuất thẻ PDF</h3>
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[85vh] overflow-hidden animate-in zoom-in-95 duration-200">
+             <div className="p-4 border-b bg-gray-50 flex justify-between items-center shrink-0">
+                 <h3 className="font-bold text-gray-800">Xuất thẻ học sinh (PDF)</h3>
                  <button onClick={() => setShowExportModal(false)} className="text-gray-400 hover:text-gray-700 font-bold px-2">&times;</button>
              </div>
-             <div className="p-4 flex-1 overflow-y-auto">
-                 <ul className="space-y-2">
-                     {/* Tùy chọn in tất cả */}
-                     <li 
-                         onClick={() => executeExport('all', 'Tat_Ca')}
-                         className="p-3 border rounded-xl hover:bg-rose-50 hover:border-rose-200 cursor-pointer transition-colors flex justify-between items-center"
-                     >
-                         <span className="font-bold text-rose-600">Tất cả học sinh</span>
-                         <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{students.length} HS</span>
-                     </li>
-                     
-                     {/* Danh sách các lớp trong hệ thống */}
-                     {classes && classes.length > 0 ? classes.map(cls => {
-                        const classStudents = students.filter(s => s.classId === cls.id);
-                        const count = classStudents.length;
-                        const CHUNK_SIZE = 90; // Giới hạn xuất tối đa 90 học sinh (15 trang) một lần để an toàn 100%
-
-                        // Nếu lớp ít học sinh, hiển thị 1 nút tải bình thường
-                        if (count <= CHUNK_SIZE) {
-                           return (
-                                 <li 
-                                    key={cls.id} 
-                                    onClick={() => executeExport(cls.id, cls.name)}
-                                    className="p-3 border rounded-xl hover:bg-indigo-50 hover:border-indigo-200 cursor-pointer transition-colors flex justify-between items-center mb-2"
-                                 >
-                                    <div>
-                                       <div className="font-bold text-gray-800">{cls.name}</div>
-                                       <div className="text-[10px] text-gray-500">{cls.classCode}</div>
-                                    </div>
-                                    <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-bold">{count} HS</span>
-                                 </li>
-                           )
-                        } 
-                        // Nếu lớp cực đông (VD: 226 HS), cắt thành nhiều nút tải
-                        else {
-                           const chunks = Math.ceil(count / CHUNK_SIZE);
-                           return (
-                                 <li key={cls.id} className="p-3 border rounded-xl mb-2 bg-gray-50">
-                                    <div className="flex justify-between items-center mb-3">
-                                       <div>
-                                             <div className="font-bold text-gray-800">{cls.name}</div>
-                                             <div className="text-[10px] text-rose-500 font-medium">Lớp quá đông, vui lòng tải theo từng đợt</div>
-                                       </div>
-                                       <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{count} HS</span>
-                                    </div>
-                                    {/* Lưới các nút chia đợt */}
-                                    <div className="grid grid-cols-2 gap-2">
-                                       {Array.from({length: chunks}).map((_, i) => {
-                                             const start = i * CHUNK_SIZE;
-                                             const end = Math.min((i + 1) * CHUNK_SIZE, count);
-                                             return (
-                                                <button
-                                                   key={i}
-                                                   onClick={() => executeExport(cls.id, cls.name, start, end)}
-                                                   className="p-2 bg-white border border-indigo-200 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors shadow-sm"
-                                                >
-                                                   Đợt {i + 1}: ({start + 1} - {end})
-                                                </button>
-                                             )
-                                       })}
-                                    </div>
-                                 </li>
-                           )
-                        }
-                     }) : (
-                        <div className="text-center text-sm text-gray-500 py-4">Chưa có lớp học nào được tạo.</div>
-                     )}
-                 </ul>
+             
+             {/* Tabs Toggle */}
+             <div className="px-4 pt-4 shrink-0">
+                <div className="flex bg-gray-100 p-1 rounded-lg">
+                    <button onClick={() => setPrintTab('byClass')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${printTab === 'byClass' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}`}>Theo lớp</button>
+                    <button onClick={() => setPrintTab('custom')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${printTab === 'custom' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500'}`}>Tùy chọn ({selectedForPrint.length})</button>
+                </div>
              </div>
+
+             <div className="p-4 flex-1 overflow-y-auto min-h-0">
+                 {printTab === 'byClass' ? (
+                     // GIAO DIỆN IN THEO LỚP (CŨ)
+                     <ul className="space-y-2">
+                         <li 
+                             onClick={() => executeExport('all', 'Tat_Ca')}
+                             className="p-3 border rounded-xl hover:bg-rose-50 hover:border-rose-200 cursor-pointer transition-colors flex justify-between items-center"
+                         >
+                             <span className="font-bold text-rose-600">Tất cả học sinh</span>
+                             <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{students.length} HS</span>
+                         </li>
+                         
+                         {classes && classes.length > 0 ? classes.map(cls => {
+                            const count = students.filter(s => s.classId === cls.id).length;
+                            const CHUNK_SIZE = 90; 
+
+                            if (count <= CHUNK_SIZE) {
+                               return (
+                                     <li 
+                                        key={cls.id} 
+                                        onClick={() => executeExport(cls.id, cls.name)}
+                                        className="p-3 border rounded-xl hover:bg-indigo-50 hover:border-indigo-200 cursor-pointer transition-colors flex justify-between items-center mb-2"
+                                     >
+                                        <div>
+                                           <div className="font-bold text-gray-800">{cls.name}</div>
+                                           <div className="text-[10px] text-gray-500">{cls.classCode}</div>
+                                        </div>
+                                        <span className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded-lg font-bold">{count} HS</span>
+                                     </li>
+                               )
+                            } 
+                            else {
+                               const chunks = Math.ceil(count / CHUNK_SIZE);
+                               return (
+                                     <li key={cls.id} className="p-3 border rounded-xl mb-2 bg-gray-50">
+                                        <div className="flex justify-between items-center mb-3">
+                                           <div>
+                                                 <div className="font-bold text-gray-800">{cls.name}</div>
+                                                 <div className="text-[10px] text-rose-500 font-medium">Chia làm nhiều đợt tải</div>
+                                           </div>
+                                           <span className="text-xs bg-rose-100 text-rose-700 px-2 py-1 rounded-lg font-bold">{count} HS</span>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-2">
+                                           {Array.from({length: chunks}).map((_, i) => {
+                                                 const start = i * CHUNK_SIZE;
+                                                 const end = Math.min((i + 1) * CHUNK_SIZE, count);
+                                                 return (
+                                                    <button
+                                                       key={i}
+                                                       onClick={() => executeExport(cls.id, cls.name, start, end)}
+                                                       className="p-2 bg-white border border-indigo-200 text-indigo-600 rounded-lg text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors shadow-sm"
+                                                    >
+                                                       Đợt {i + 1}: ({start + 1} - {end})
+                                                    </button>
+                                                 )
+                                           })}
+                                        </div>
+                                     </li>
+                               )
+                            }
+                         }) : (
+                            <div className="text-center text-sm text-gray-500 py-4">Chưa có lớp học nào.</div>
+                         )}
+                     </ul>
+                 ) : (
+                     // GIAO DIỆN IN CHỌN LỌC THỦ CÔNG
+                     <div className="flex flex-col h-full">
+                         <div className="relative mb-3 shrink-0">
+                            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input 
+                               type="text" placeholder="Tìm tên hoặc mã HS..." 
+                               className="w-full border border-gray-300 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                               value={printSearchQuery} onChange={(e) => setPrintSearchQuery(e.target.value)}
+                            />
+                         </div>
+                         <div className="flex-1 overflow-y-auto border border-gray-100 rounded-lg max-h-[40vh]">
+                             <ul className="divide-y divide-gray-50">
+                                 {students.filter(s => {
+                                     if (!printSearchQuery) return true;
+                                     const q = printSearchQuery.toLowerCase();
+                                     return s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q);
+                                 }).slice(0, printSearchQuery ? 50 : 20).map(s => { // Giới hạn hiển thị để chống lag
+                                     const isSelected = selectedForPrint.includes(s.id);
+                                     return (
+                                         <li 
+                                            key={s.id} onClick={() => togglePrintSelection(s.id)}
+                                            className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${isSelected ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}
+                                         >
+                                            <div>
+                                               <div className="font-medium text-gray-800">{s.fullName}</div>
+                                               <div className="text-[10px] text-gray-500">{s.studentCode} {s.className ? `(${s.className})` : ''}</div>
+                                            </div>
+                                            <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300'}`}>
+                                                {isSelected && <CheckCircle size={14} className="text-white" />}
+                                            </div>
+                                         </li>
+                                     )
+                                 })}
+                             </ul>
+                             {!printSearchQuery && students.length > 20 && (
+                                <div className="p-2 text-center text-[10px] text-gray-400 bg-gray-50">Sử dụng ô tìm kiếm để thấy nhiều hơn...</div>
+                             )}
+                         </div>
+                     </div>
+                 )}
+             </div>
+
+             {/* Nút In dưới đáy cho Tab Thủ Công */}
+             {printTab === 'custom' && (
+                 <div className="p-4 border-t bg-gray-50 shrink-0">
+                     <button 
+                         onClick={executeCustomExport} 
+                         disabled={selectedForPrint.length === 0}
+                         className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-bold disabled:opacity-50 shadow-sm hover:bg-indigo-700 transition-colors"
+                     >
+                         In {selectedForPrint.length} thẻ đã chọn
+                     </button>
+                 </div>
+             )}
           </div>
         </div>
       )}
