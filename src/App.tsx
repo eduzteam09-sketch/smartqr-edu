@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, where } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp, Download, Archive } from 'lucide-react';
 
 // ==========================================
@@ -36,6 +36,7 @@ export default function App() {
   const [students, setStudents] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [classes, setClasses] = useState([]);
+  const [importantDates, setImportantDates] = useState([]);
   const [activeTab, setActiveTab] = useState('scanner');
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
@@ -116,11 +117,19 @@ export default function App() {
       data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setClasses(data);
     }, (error) => console.error(error));
+    const datesRef = collection(db, 'artifacts', appId, 'public', 'data', 'important_dates');
+    const unsubDates = onSnapshot(datesRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      // Sắp xếp theo ngày tăng dần
+      data.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      setImportantDates(data);
+    }, (error) => console.error(error));
 
     return () => {
       unsubStudents();
       unsubAttendance();
       unsubClasses();
+      unsubDates();
     };
   }, [user]);
 
@@ -179,8 +188,8 @@ export default function App() {
       <main className="flex-1 overflow-y-auto bg-gray-50 pb-24">
         <div className="max-w-md mx-auto px-4 py-6">
           {activeTab === 'dashboard' && <DashboardView stats={stats} />}
-          {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} />}
-          {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} />}
+          {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} importantDates={importantDates} db={db} appId={appId} />}
+          {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} importantDates={importantDates} db={db} appId={appId} />}
           {activeTab === 'scanner' && <ScannerView students={students} attendance={attendance} user={user} showToast={showToast} />}
           {activeTab === 'history' && <HistoryView attendance={todayAttendance} students={students} />}
         </div>
@@ -354,7 +363,7 @@ function DashboardView({ stats }) {
   );
 }
 
-function ClassesView({ classes, students, attendance, showToast }) {
+function ClassesView({ classes, students, attendance, showToast, importantDates, db, appId }) {
   const [selectedClass, setSelectedClass] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [editingClass, setEditingClass] = useState(null);
@@ -364,9 +373,11 @@ function ClassesView({ classes, students, attendance, showToast }) {
   const [searchQuery, setSearchQuery] = useState(''); // Tìm kiếm trong Modal Thêm HS
   const [classSearchQuery, setClassSearchQuery] = useState(''); // Tìm kiếm HS trong lớp đang xem
   const [sortByAttendance, setSortByAttendance] = useState(false);
+  const [showImportantDates, setShowImportantDates] = useState(false);
   
   // State quản lý số lượng hiển thị (Phân trang UI)
-  const [visibleCount, setVisibleCount] = useState(15); 
+  const [visibleCount, setVisibleCount] = useState(15);
+  const [modalVisibleCount, setModalVisibleCount] = useState(15);
 
   const handleAddClass = async (e) => {
     e.preventDefault();
@@ -465,16 +476,38 @@ function ClassesView({ classes, students, attendance, showToast }) {
     const present = classStudents.filter(s => attendance.some(log => log.studentId === s.id)).length;
     const rate = total === 0 ? 0 : Math.round((present / total) * 100);
 
-    const availableStudents = students.filter(s => s.classId !== selectedClass.id);
-    let filteredAvailableStudents = availableStudents.filter(s => {
-       if (!searchQuery) return true;
-       const lowerQuery = searchQuery.toLowerCase();
-       return (s.fullName?.toLowerCase().includes(lowerQuery) || s.studentCode?.toLowerCase().includes(lowerQuery));
-    });
+    //const availableStudents = students.filter(s => s.classId !== selectedClass.id);
+    // 1. Lấy tất cả học sinh chưa có lớp
+    const allUnassignedStudents = students.filter(s => !s.classId);
 
-    // Tối ưu: Nếu không tìm kiếm, chỉ hiện 15 học viên mới nhất trong danh sách thêm
+    // 2. Hàm chuẩn hóa tên để so sánh thông minh (Bỏ các từ khóa dư thừa)
+    const normalizeName = (name) => {
+        if (!name) return '';
+        return name.toLowerCase()
+                   .replace(/hồ bơi tiểu học/g, '')
+                   .replace(/hồ bơi/g, '')
+                   .replace(/điểm hồ/g, '')
+                   .replace(/lớp/g, '')
+                   .trim();
+    };
+
+    // 3. Danh sách gợi ý: Chỉ những học sinh chưa có lớp VÀ khớp cụm từ điểm bơi
+    const suggestedStudents = allUnassignedStudents.filter(s => 
+        s.swimmingPool && normalizeName(s.swimmingPool) === normalizeName(selectedClass.name)
+    );
+
+    // 4. Phân luồng hiển thị
+    let filteredAvailableStudents = [];
     if (!searchQuery) {
-        filteredAvailableStudents = filteredAvailableStudents.slice(0, 15);
+        // Nếu KHÔNG tìm kiếm -> Chỉ hiện danh sách gợi ý theo biến đếm
+        filteredAvailableStudents = suggestedStudents.slice(0, modalVisibleCount);
+    } else {
+        // Nếu CÓ tìm kiếm -> Tìm trên TOÀN BỘ học sinh của hệ thống (chỉ trừ những em đã ở sẵn trong lớp này)
+        const lowerQuery = searchQuery.toLowerCase();
+        filteredAvailableStudents = students.filter(s => 
+            s.classId !== selectedClass.id &&
+            (s.fullName?.toLowerCase().includes(lowerQuery) || s.studentCode?.toLowerCase().includes(lowerQuery))
+        );
     }
 
     // Lọc học sinh TRONG LỚP theo classSearchQuery
@@ -528,7 +561,7 @@ function ClassesView({ classes, students, attendance, showToast }) {
                  <button onClick={() => setSortByAttendance(!sortByAttendance)} className={`p-1.5 rounded-lg text-xs font-medium flex items-center transition-colors ${sortByAttendance ? 'bg-indigo-100 text-indigo-700' : 'bg-white border text-gray-600 hover:bg-gray-50'}`} title="Sắp xếp theo số buổi đã học">
                     <ArrowDownUp size={14}/>
                  </button>
-                 <button onClick={() => setShowAddStudentModal(true)} className="bg-indigo-600 text-white p-1.5 rounded-lg text-xs font-medium flex items-center gap-1">
+                 <button onClick={() => { setShowAddStudentModal(true); setModalVisibleCount(15); }} className="bg-indigo-600 text-white p-1.5 rounded-lg text-xs font-medium flex items-center gap-1">
                     <UserPlus size={14}/> Thêm
                  </button>
               </div>
@@ -600,6 +633,10 @@ function ClassesView({ classes, students, attendance, showToast }) {
                           value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                        />
                     </div>
+                    <div className="text-xs text-gray-500 mb-2 mt-2 italic px-1">
+                        Có <span className="font-bold">{suggestedStudents.length}</span> học sinh đăng ký gợi ý cho lớp này.
+                        {searchQuery && <span className="block text-indigo-500 mt-0.5 font-medium">Đang tìm kiếm trên toàn bộ hệ thống...</span>}
+                     </div>
                     <div className="flex-1 overflow-y-auto border border-gray-100 rounded-lg">
                        {filteredAvailableStudents.length === 0 ? (
                           <div className="p-4 text-center text-gray-500 text-xs">Không tìm thấy.</div>
@@ -624,9 +661,19 @@ function ClassesView({ classes, students, attendance, showToast }) {
                              })}
                           </ul>
                        )}
-                       {!searchQuery && availableStudents.length > 15 && (
-                          <div className="p-2 text-center text-[10px] text-gray-400 bg-gray-50">
-                             Nhập tên/mã để tìm thêm...
+                       {!searchQuery && (
+                          <div className="p-3 text-center bg-gray-50 flex flex-col items-center gap-2 shrink-0 border-t border-gray-100">
+                             {modalVisibleCount < suggestedStudents.length && (
+                                <button 
+                                   onClick={() => setModalVisibleCount(prev => prev + 15)} 
+                                   className="px-4 py-1.5 bg-white border border-gray-200 text-indigo-600 text-xs font-bold rounded-full shadow-sm hover:bg-indigo-50 transition-colors"
+                                >
+                                   Xem thêm {suggestedStudents.length - modalVisibleCount} gợi ý...
+                                </button>
+                             )}
+                             <div className="text-[10px] text-gray-400">
+                                Nhập tên/mã để tìm học sinh khác trên toàn hệ thống...
+                             </div>
                           </div>
                        )}
                     </div>
@@ -645,13 +692,22 @@ function ClassesView({ classes, students, attendance, showToast }) {
     );
   }
 
+  if (showImportantDates) {
+     return <ImportantDatesView onBack={() => setShowImportantDates(false)} classes={classes} students={students} importantDates={importantDates} db={db} appId={appId} showToast={showToast} />;
+  }
+
   return (
     <div className="space-y-4 animate-in fade-in">
        <div className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-gray-100">
           <h3 className="font-bold text-gray-800">Quản lý Lớp học</h3>
-          <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
-             {isAdding ? 'Đóng' : '+ Lớp mới'}
-          </button>
+          <div className="flex gap-2">
+             <button onClick={() => setShowImportantDates(true)} className="bg-amber-50 text-amber-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+                Lịch Quan Trọng
+             </button>
+             <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+                {isAdding ? 'Đóng' : '+ Lớp mới'}
+             </button>
+          </div>
        </div>
 
        {(isAdding || editingClass) && (
@@ -707,7 +763,7 @@ function ClassesView({ classes, students, attendance, showToast }) {
   );
 }
 
-function StudentsView({ students, classes, showToast }) {
+function StudentsView({ students, classes, showToast, importantDates, db, appId }) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [studentDetails, setStudentDetails] = useState(null);
@@ -734,6 +790,20 @@ function StudentsView({ students, classes, showToast }) {
   const [showProfileZipModal, setShowProfileZipModal] = useState(false);
   const [isExportingZip, setIsExportingZip] = useState(false);
   const [exportZipProgress, setExportZipProgress] = useState({ current: 0, total: 0 });
+  const [profileAttendance, setProfileAttendance] = useState([]);
+  useEffect(() => {
+      if (studentDetails) {
+         const fetchStudentLogs = async () => {
+            const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), where('studentId', '==', studentDetails.id));
+            const snap = await getDocs(q);
+            // Lưu danh sách các ngày đã điểm danh của học sinh này (dạng YYYY-MM-DD)
+            setProfileAttendance(snap.docs.map(d => d.data().dateString));
+         };
+         fetchStudentLogs();
+      } else {
+         setProfileAttendance([]);
+      }
+   }, [studentDetails, db, appId]);
   // THÊM ĐOẠN NÀY: Tự động gom nhóm các điểm hồ bơi đã có trong data
   const defaultPools = ["Hồ bơi Tiểu học Võ Trường Toản", "Hồ bơi Tiểu học An Bình"];
   const existingPools = students.map(s => s.swimmingPool).filter(Boolean);
@@ -831,7 +901,7 @@ function StudentsView({ students, classes, showToast }) {
              appContainer.classList.remove('min-h-screen');
           }
        }
-    }, 3500); 
+    }, 3500);
   };
 
   // --- THÊM 2 HÀM MỚI NÀY NGAY DƯỚI HÀM executeExport ---
@@ -1315,14 +1385,14 @@ function StudentsView({ students, classes, showToast }) {
 
       {/* POPUP CHI TIẾT HỌC SINH */}
       {studentDetails && (
-        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-xl animate-in zoom-in-95 duration-200">
-             <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-                 <h3 className="font-bold text-gray-800">Hồ sơ học sinh</h3>
+      <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4">
+         <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
+             <div className="p-4 border-b flex justify-between items-center bg-gray-50 shrink-0">
+               <h3 className="font-bold text-gray-800">Hồ sơ học sinh</h3>
                 <button onClick={() => setStudentDetails(null)} className="text-gray-400 hover:text-gray-700 font-bold px-2">&times;</button>
              </div>
-             <div className="p-5">
-                <div className="flex items-center gap-4 mb-5 border-b pb-4">
+             <div className="p-5 flex-1 overflow-y-auto">
+               <div className="flex items-center gap-4 mb-5 border-b pb-4">
                    <div className="w-16 h-16 rounded-full bg-indigo-100 text-indigo-700 flex justify-center items-center font-bold text-xl shrink-0">
                       {studentDetails.avatar ? <img src={studentDetails.avatar} className="w-full h-full rounded-full object-cover"/> : studentDetails.fullName.charAt(0)}
                    </div>
@@ -1370,6 +1440,43 @@ function StudentsView({ students, classes, showToast }) {
                        </div>
                    </div>
 
+                   {/* --- LỊCH QUAN TRỌNG --- */}
+                   <div className="bg-white rounded-xl p-3 mt-2 border border-gray-100">
+                       <h5 className="text-[10px] font-bold text-gray-500 mb-2 uppercase">Lịch Quan Trọng</h5>
+                       {importantDates && importantDates.length > 0 ? (
+                           <div className="space-y-2">
+                               {importantDates.map(dateObj => {
+                                   const isAttended = profileAttendance.includes(dateObj.date);
+                                   // So sánh ngày để biết đã tới lịch hay chưa
+                                   const isPast = new Date(dateObj.date).setHours(0,0,0,0) <= new Date().setHours(0,0,0,0);
+                                   
+                                   let statusText = " - ";
+                                   let statusColor = "text-gray-400";
+                                   if (isAttended) {
+                                       statusText = "Đã tham gia";
+                                       statusColor = "text-emerald-600";
+                                   } else if (isPast) {
+                                       statusText = "Không tham gia";
+                                       statusColor = "text-rose-600";
+                                   }
+
+                                   return (
+                                       <div key={dateObj.id} className="flex justify-between items-center border-b border-gray-50 pb-2 last:border-0 last:pb-0">
+                                           <span className="text-gray-700 text-xs truncate pr-2">
+                                               {new Date(dateObj.date).toLocaleDateString('vi-VN')} - {dateObj.name}
+                                           </span>
+                                           <span className={`text-[10px] font-bold shrink-0 ${statusColor}`}>
+                                               {statusText}
+                                           </span>
+                                       </div>
+                                   )
+                               })}
+                           </div>
+                       ) : (
+                           <p className="text-xs text-gray-400 italic">Chưa có lịch quan trọng nào.</p>
+                       )}
+                   </div>
+
                    {/* --- THÔNG TIN KIỂM TRA KỸ THUẬT BƠI --- */}
                    <div className="bg-indigo-50/50 rounded-xl p-3 mt-2 border border-indigo-50">
                        <h5 className="text-[10px] font-bold text-indigo-600 mb-2 uppercase">Kiểm tra kỹ thuật bơi</h5>
@@ -1388,7 +1495,7 @@ function StudentsView({ students, classes, showToast }) {
              </div>
              
              {/* NÚT THAO TÁC Ở ĐÁY POPUP */}
-             <div className="p-3 border-t bg-white flex gap-2">
+             <div className="p-3 border-t bg-white flex gap-2 shrink-0">
                 <button onClick={handleExportProfilePDF} className="flex flex-col items-center justify-center w-[72px] bg-rose-50 text-rose-600 rounded-lg text-[10px] font-bold hover:bg-rose-100 transition-colors shrink-0">
                     <Download size={18} className="mb-0.5" />
                     Xuất PDF
@@ -1954,6 +2061,165 @@ function StudentsView({ students, classes, showToast }) {
 //     </div>
 //   );
 // }
+
+function ImportantDatesView({ onBack, classes, students, importantDates, db, appId, showToast }) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [newDate, setNewDate] = useState({ date: '', name: '' });
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [searchClass, setSearchClass] = useState('');
+  const [isLoadingStats, setIsLoadingStats] = useState(false);
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    if (!newDate.date || !newDate.name) return;
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'important_dates'), { ...newDate, createdAt: Date.now() });
+      setNewDate({ date: '', name: '' });
+      setIsAdding(false);
+      showToast('Đã tạo lịch thành công!');
+    } catch (error) { showToast('Lỗi khi tạo', 'error'); }
+  };
+
+  const handleDelete = async (id) => {
+    if(window.confirm('Bạn có chắc muốn xóa lịch này?')) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'important_dates', id));
+      showToast('Đã xóa lịch');
+    }
+  };
+
+  const openDateStats = async (dateObj) => {
+    setSelectedDate(dateObj);
+    setIsLoadingStats(true);
+    try {
+      // Truy xuất điểm danh đúng ngày đó
+      const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), where('dateString', '==', dateObj.date));
+      const snap = await getDocs(q);
+      const attendedStudentIds = snap.docs.map(d => d.data().studentId);
+      
+      let totalJoined = 0;
+      let totalMissed = 0;
+      const classStats = classes.map(cls => {
+         const classStudents = students.filter(s => s.classId === cls.id);
+         const joined = classStudents.filter(s => attendedStudentIds.includes(s.id));
+         const missed = classStudents.filter(s => !attendedStudentIds.includes(s.id));
+         totalJoined += joined.length;
+         totalMissed += missed.length;
+         return { ...cls, joined: joined.length, missed: missed.length, missedList: missed };
+      });
+      
+      setStats({ totalJoined, totalMissed, classStats });
+    } catch (e) {
+      showToast('Lỗi tải thống kê', 'error');
+    }
+    setIsLoadingStats(false);
+  };
+
+  const downloadMissedList = (clsName, missedList) => {
+      if (missedList.length === 0) { showToast('Không có học sinh vắng', 'error'); return; }
+      let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // Kèm BOM để hỗ trợ tiếng Việt
+      csvContent += "Mã HS,Họ tên,Lớp,SĐT Phụ huynh\n";
+      missedList.forEach(s => {
+          csvContent += `${s.studentCode},${s.fullName},${s.className || ''},${s.parentPhone || ''}\n`;
+      });
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Hoc_Sinh_Vang_${clsName.replace(/\s+/g, '_')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
+  if (selectedDate) {
+      const filteredClasses = stats?.classStats.filter(c => c.name.toLowerCase().includes(searchClass.toLowerCase())) || [];
+      return (
+          <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
+             <div className="flex items-center gap-3">
+                 <button onClick={() => setSelectedDate(null)} className="p-2 bg-white rounded-lg border shadow-sm"><ChevronLeft size={20} /></button>
+                 <div>
+                    <h2 className="text-xl font-bold text-gray-800">{selectedDate.name}</h2>
+                    <p className="text-gray-500 text-xs">Ngày: {new Date(selectedDate.date).toLocaleDateString('vi-VN')}</p>
+                 </div>
+             </div>
+
+             {isLoadingStats ? (
+                 <div className="p-10 flex justify-center"><Loader2 className="animate-spin text-indigo-600" size={32} /></div>
+             ) : (
+                 <>
+                     <div className="grid grid-cols-2 gap-3">
+                        <div className="bg-white p-3 rounded-xl shadow-sm border border-emerald-100 text-center"><p className="text-xs text-gray-500 mb-1">Tổng tham gia</p><p className="text-2xl font-bold text-emerald-600">{stats?.totalJoined}</p></div>
+                        <div className="bg-white p-3 rounded-xl shadow-sm border border-rose-100 text-center"><p className="text-xs text-gray-500 mb-1">Tổng không tham gia</p><p className="text-2xl font-bold text-rose-600">{stats?.totalMissed}</p></div>
+                     </div>
+                     <div className="relative">
+                         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                         <input type="text" placeholder="Tìm kiếm theo tên lớp..." className="w-full border border-gray-200 rounded-xl py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white shadow-sm" value={searchClass} onChange={(e) => setSearchClass(e.target.value)} />
+                     </div>
+                     <div className="space-y-3">
+                         {filteredClasses.map(cls => (
+                             <div key={cls.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between">
+                                 <div>
+                                     <h4 className="font-bold text-gray-900 text-sm">{cls.name}</h4>
+                                     <div className="flex gap-3 mt-1 text-xs">
+                                         <span className="text-emerald-600 font-medium">Tham gia: {cls.joined}</span>
+                                         <span className="text-rose-600 font-medium">Vắng: {cls.missed}</span>
+                                     </div>
+                                 </div>
+                                 <button onClick={() => downloadMissedList(cls.name, cls.missedList)} className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex flex-col items-center gap-1 transition-colors">
+                                     <Download size={14}/>
+                                     <span className="text-[9px] font-bold">Tải DS Vắng</span>
+                                 </button>
+                             </div>
+                         ))}
+                     </div>
+                 </>
+             )}
+          </div>
+      )
+  }
+
+  return (
+    <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
+      <div className="flex items-center justify-between bg-white p-3 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3">
+             <button onClick={onBack} className="p-2 bg-gray-50 rounded-lg text-gray-600"><ChevronLeft size={20} /></button>
+             <h3 className="font-bold text-gray-800">Lịch Quan Trọng</h3>
+          </div>
+          <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+             {isAdding ? 'Đóng' : '+ Tạo lịch'}
+          </button>
+      </div>
+
+      {isAdding && (
+         <form onSubmit={handleAdd} className="bg-white p-4 rounded-xl shadow-sm border border-indigo-100 space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+               <input type="date" value={newDate.date} onChange={e => setNewDate({...newDate, date: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" required />
+               <input type="text" value={newDate.name} onChange={e => setNewDate({...newDate, name: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" placeholder="Tên buổi học (VD: Test kỹ thuật)" required />
+            </div>
+            <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">Tạo mới</button>
+         </form>
+      )}
+
+      <div className="space-y-3">
+          {importantDates.length === 0 ? (
+             <div className="text-center p-6 text-gray-400 text-sm bg-white rounded-xl">Chưa có lịch quan trọng nào.</div>
+          ) : (
+             importantDates.map(dateObj => (
+                 <div key={dateObj.id} onClick={() => openDateStats(dateObj)} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer hover:border-indigo-300 transition-colors">
+                     <div>
+                         <h4 className="font-bold text-gray-900">{dateObj.name}</h4>
+                         <p className="text-xs text-gray-500 mt-0.5">{new Date(dateObj.date).toLocaleDateString('vi-VN')}</p>
+                     </div>
+                     <button onClick={(e) => { e.stopPropagation(); handleDelete(dateObj.id); }} className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
+                         <Trash2 size={16}/>
+                     </button>
+                 </div>
+             ))
+          )}
+      </div>
+    </div>
+  );
+}
 
 function ScannerView({ students, attendance, user, showToast }) {
   const [isScanning, setIsScanning] = useState(true);
