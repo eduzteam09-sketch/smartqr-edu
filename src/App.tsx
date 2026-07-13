@@ -2069,6 +2069,8 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
   const [stats, setStats] = useState(null);
   const [searchClass, setSearchClass] = useState('');
   const [isLoadingStats, setIsLoadingStats] = useState(false);
+  const [editingDate, setEditingDate] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(15);
 
   const handleAdd = async (e) => {
     e.preventDefault();
@@ -2086,6 +2088,20 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'important_dates', id));
       showToast('Đã xóa lịch');
     }
+  };
+
+  const handleUpdate = async (e) => {
+    e.preventDefault();
+    if (!editingDate.date || !editingDate.name) return;
+    try {
+      const dateRef = doc(db, 'artifacts', appId, 'public', 'data', 'important_dates', editingDate.id);
+      await updateDoc(dateRef, {
+        date: editingDate.date,
+        name: editingDate.name
+      });
+      setEditingDate(null);
+      showToast('Đã cập nhật lịch thành công!');
+    } catch (error) { showToast('Lỗi khi cập nhật', 'error'); }
   };
 
   const openDateStats = async (dateObj) => {
@@ -2185,18 +2201,22 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
              <button onClick={onBack} className="p-2 bg-gray-50 rounded-lg text-gray-600"><ChevronLeft size={20} /></button>
              <h3 className="font-bold text-gray-800">Lịch Quan Trọng</h3>
           </div>
-          <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+          <button onClick={() => {setIsAdding(!isAdding); setEditingDate(null);}} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
              {isAdding ? 'Đóng' : '+ Tạo lịch'}
           </button>
       </div>
 
-      {isAdding && (
-         <form onSubmit={handleAdd} className="bg-white p-4 rounded-xl shadow-sm border border-indigo-100 space-y-3">
+      {(isAdding || editingDate) && (
+         <form onSubmit={editingDate ? handleUpdate : handleAdd} className="bg-white p-4 rounded-xl shadow-sm border border-indigo-100 space-y-3">
+            <h4 className="text-sm font-bold text-indigo-800">{editingDate ? 'Sửa thông tin lịch' : 'Tạo lịch mới'}</h4>
             <div className="grid grid-cols-2 gap-3">
-               <input type="date" value={newDate.date} onChange={e => setNewDate({...newDate, date: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" required />
-               <input type="text" value={newDate.name} onChange={e => setNewDate({...newDate, name: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" placeholder="Tên buổi học (VD: Test kỹ thuật)" required />
+               <input type="date" value={editingDate ? editingDate.date : newDate.date} onChange={e => editingDate ? setEditingDate({...editingDate, date: e.target.value}) : setNewDate({...newDate, date: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white" required />
+               <input type="text" value={editingDate ? editingDate.name : newDate.name} onChange={e => editingDate ? setEditingDate({...editingDate, name: e.target.value}) : setNewDate({...newDate, name: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" placeholder="Tên buổi học (VD: Test kỹ thuật)" required />
             </div>
-            <button type="submit" className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">Tạo mới</button>
+            <div className="flex gap-2">
+               <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">{editingDate ? 'Lưu' : 'Tạo mới'}</button>
+               {editingDate && <button type="button" onClick={() => setEditingDate(null)} className="px-4 bg-gray-100 rounded-lg text-sm font-bold">Hủy</button>}
+            </div>
          </form>
       )}
 
@@ -2204,17 +2224,47 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
           {importantDates.length === 0 ? (
              <div className="text-center p-6 text-gray-400 text-sm bg-white rounded-xl">Chưa có lịch quan trọng nào.</div>
           ) : (
-             importantDates.map(dateObj => (
-                 <div key={dateObj.id} onClick={() => openDateStats(dateObj)} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer hover:border-indigo-300 transition-colors">
-                     <div>
-                         <h4 className="font-bold text-gray-900">{dateObj.name}</h4>
-                         <p className="text-xs text-gray-500 mt-0.5">{new Date(dateObj.date).toLocaleDateString('vi-VN')}</p>
-                     </div>
-                     <button onClick={(e) => { e.stopPropagation(); handleDelete(dateObj.id); }} className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
-                         <Trash2 size={16}/>
-                     </button>
-                 </div>
-             ))
+             (() => {
+                 // Sắp xếp ngày mới nhất lên đầu (Descending)
+                 const sortedDates = [...importantDates].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                 // Phân trang
+                 const paginatedDates = sortedDates.slice(0, visibleCount);
+
+                 return (
+                     <>
+                         {paginatedDates.map(dateObj => (
+                             <div key={dateObj.id} onClick={() => openDateStats(dateObj)} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between cursor-pointer hover:border-indigo-300 transition-colors">
+                                 {/* Thêm flex-1, text-left và pr-4 để chống tràn và căn trái */}
+                                 <div className="text-left flex-1 pr-4">
+                                     <h4 className="font-bold text-gray-900 leading-snug">{dateObj.name}</h4>
+                                     <p className="text-xs text-gray-500 mt-1">{new Date(dateObj.date).toLocaleDateString('vi-VN')}</p>
+                                 </div>
+                                 {/* Khu vực chứa nút Sửa và Xóa */}
+                                 <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                     <button onClick={() => { setEditingDate(dateObj); setIsAdding(false); window.scrollTo({top:0}); }} className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Sửa lịch">
+                                         <Edit2 size={16}/>
+                                     </button>
+                                     <button onClick={() => handleDelete(dateObj.id)} className="p-2 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Xóa lịch">
+                                         <Trash2 size={16}/>
+                                     </button>
+                                 </div>
+                             </div>
+                         ))}
+                         
+                         {/* Nút Xem thêm */}
+                         {visibleCount < sortedDates.length && (
+                            <div className="pt-2 pb-4 flex justify-center">
+                               <button 
+                                  onClick={() => setVisibleCount(prev => prev + 15)} 
+                                  className="px-4 py-2 bg-white border border-gray-200 text-indigo-600 text-xs font-bold rounded-full shadow-sm hover:bg-indigo-50 transition-colors"
+                               >
+                                  Xem thêm {sortedDates.length - visibleCount} lịch...
+                               </button>
+                            </div>
+                         )}
+                     </>
+                 );
+             })()
           )}
       </div>
     </div>
