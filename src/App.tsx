@@ -37,6 +37,7 @@ export default function App() {
   const [attendance, setAttendance] = useState([]);
   const [classes, setClasses] = useState([]);
   const [importantDates, setImportantDates] = useState([]);
+  const [classifications, setClassifications] = useState([]);
   const [activeTab, setActiveTab] = useState('scanner');
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
@@ -117,6 +118,13 @@ export default function App() {
       data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
       setClasses(data);
     }, (error) => console.error(error));
+
+   const classifRef = collection(db, 'artifacts', appId, 'public', 'data', 'classifications');
+    const unsubClassif = onSnapshot(classifRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setClassifications(data);
+    }, (error) => console.error(error));
+
     const datesRef = collection(db, 'artifacts', appId, 'public', 'data', 'important_dates');
     const unsubDates = onSnapshot(datesRef, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -129,6 +137,7 @@ export default function App() {
       unsubStudents();
       unsubAttendance();
       unsubClasses();
+      unsubClassif();
       unsubDates();
     };
   }, [user]);
@@ -188,7 +197,7 @@ export default function App() {
       <main className="flex-1 overflow-y-auto bg-gray-50 pb-24">
         <div className="max-w-md mx-auto px-4 py-6">
           {activeTab === 'dashboard' && <DashboardView stats={stats} />}
-          {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} importantDates={importantDates} db={db} appId={appId} />}
+          {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} importantDates={importantDates} db={db} appId={appId} classifications={classifications} />}
           {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} importantDates={importantDates} db={db} appId={appId} />}
           {activeTab === 'scanner' && <ScannerView students={students} attendance={attendance} user={user} showToast={showToast} />}
           {activeTab === 'history' && <HistoryView attendance={todayAttendance} students={students} />}
@@ -363,17 +372,19 @@ function DashboardView({ stats }) {
   );
 }
 
-function ClassesView({ classes, students, attendance, showToast, importantDates, db, appId }) {
+function ClassesView({ classes, students, attendance, showToast, importantDates, db, appId, classifications }) {
   const [selectedClass, setSelectedClass] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [editingClass, setEditingClass] = useState(null);
-  const [newClass, setNewClass] = useState({ name: '', session: 'Sáng', classCode: '' });
+  const [newClass, setNewClass] = useState({ name: '', session: 'Sáng', classCode: '', classification: '' });
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
   const [studentsToAdd, setStudentsToAdd] = useState([]);
   const [searchQuery, setSearchQuery] = useState(''); // Tìm kiếm trong Modal Thêm HS
   const [classSearchQuery, setClassSearchQuery] = useState(''); // Tìm kiếm HS trong lớp đang xem
   const [sortByAttendance, setSortByAttendance] = useState(false);
   const [showImportantDates, setShowImportantDates] = useState(false);
+  const [showClassifModal, setShowClassifModal] = useState(false);
+  const [newClassifName, setNewClassifName] = useState('');
   
   // State quản lý số lượng hiển thị (Phân trang UI)
   const [visibleCount, setVisibleCount] = useState(15);
@@ -400,7 +411,7 @@ function ClassesView({ classes, students, attendance, showToast, importantDates,
     try {
       const classRef = doc(db, 'artifacts', appId, 'public', 'data', 'classes', editingClass.id);
       await updateDoc(classRef, {
-        name: editingClass.name, session: editingClass.session, classCode: editingClass.classCode
+        name: editingClass.name, session: editingClass.session, classCode: editingClass.classCode, classification: editingClass.classification || ''
       });
       
       // SỬA Ở ĐÂY: Quét tìm các HS trong lớp và đổi tên hệ thống sang tên mới
@@ -693,21 +704,57 @@ function ClassesView({ classes, students, attendance, showToast, importantDates,
   }
 
   if (showImportantDates) {
-     return <ImportantDatesView onBack={() => setShowImportantDates(false)} classes={classes} students={students} importantDates={importantDates} db={db} appId={appId} showToast={showToast} />;
-  }
+     return <ImportantDatesView onBack={() => setShowImportantDates(false)} classes={classes} students={students} importantDates={importantDates} db={db} appId={appId} showToast={showToast} classifications={classifications} />;
+   }
 
   return (
     <div className="space-y-4 animate-in fade-in">
-       <div className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-gray-100">
-          <h3 className="font-bold text-gray-800">Quản lý Lớp học</h3>
-          <div className="flex gap-2">
-             <button onClick={() => setShowImportantDates(true)} className="bg-amber-50 text-amber-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col gap-3">
+          <h3 className="font-bold text-gray-800 text-lg">Quản lý Lớp học</h3>
+          <div className="grid grid-cols-3 gap-2">
+             <button onClick={() => setShowClassifModal(true)} className="bg-purple-50 text-purple-600 py-2.5 px-1 rounded-xl text-xs font-bold text-center leading-snug flex items-center justify-center min-h-[44px]">
+                Phân loại
+             </button>
+             <button onClick={() => setShowImportantDates(true)} className="bg-amber-50 text-amber-600 py-2.5 px-1 rounded-xl text-xs font-bold text-center leading-snug flex items-center justify-center min-h-[44px]">
                 Lịch Quan Trọng
              </button>
-             <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-xs font-bold">
+             <button onClick={() => setIsAdding(!isAdding)} className="bg-indigo-50 text-indigo-600 py-2.5 px-1 rounded-xl text-xs font-bold text-center leading-snug flex items-center justify-center min-h-[44px]">
                 {isAdding ? 'Đóng' : '+ Lớp mới'}
              </button>
           </div>
+          {/* Modal Quản lý Phân Loại */}
+         {showClassifModal && (
+            <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4">
+               <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[80vh] overflow-hidden">
+                  <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                     <h3 className="font-bold text-gray-800">Quản lý Phân loại</h3>
+                     <button onClick={() => setShowClassifModal(false)} className="text-gray-400 hover:text-gray-700 font-bold px-2">&times;</button>
+                  </div>
+                  <div className="p-4 border-b flex gap-2">
+                     <input type="text" value={newClassifName} onChange={e => setNewClassifName(e.target.value)} placeholder="Tên phân loại mới..." className="flex-1 border rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                     <button onClick={async () => {
+                        if(!newClassifName) return;
+                        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'classifications'), { name: newClassifName, createdAt: Date.now() });
+                        setNewClassifName(''); showToast('Đã thêm phân loại');
+                     }} className="bg-indigo-600 text-white px-4 rounded-lg text-sm font-bold">Thêm</button>
+                  </div>
+                  <div className="p-4 flex-1 overflow-y-auto">
+                     <ul className="space-y-2">
+                        {classifications.map(c => (
+                           <li key={c.id} className="flex justify-between items-center p-3 border rounded-xl bg-gray-50">
+                              <span className="font-bold text-sm text-gray-700">{c.name}</span>
+                              <button onClick={async () => {
+                                 if(window.confirm('Xóa phân loại này?')) {
+                                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'classifications', c.id));
+                                 }
+                              }} className="text-rose-500 hover:bg-rose-100 p-1.5 rounded-lg transition-colors"><Trash2 size={16}/></button>
+                           </li>
+                        ))}
+                     </ul>
+                  </div>
+               </div>
+            </div>
+         )}
        </div>
 
        {(isAdding || editingClass) && (
@@ -717,6 +764,10 @@ function ClassesView({ classes, students, attendance, showToast, importantDates,
                <input type="text" value={editingClass ? editingClass.name : newClass.name} onChange={e => editingClass ? setEditingClass({...editingClass, name: e.target.value}) : setNewClass({...newClass, name: e.target.value})} className="border rounded-lg p-2 text-sm" placeholder="Tên lớp (10A1)" required />
                <input type="text" value={editingClass ? editingClass.classCode : 'Hệ thống tự sinh'} onChange={e => editingClass ? setEditingClass({...editingClass, classCode: e.target.value}) : null} disabled={!editingClass} className={`border rounded-lg p-2 text-sm ${!editingClass ? 'bg-gray-100 text-gray-500' : ''}`} placeholder="Mã lớp" required={!!editingClass} />
             </div>
+            <select value={editingClass ? editingClass.classification || '' : newClass.classification} onChange={e => editingClass ? setEditingClass({...editingClass, classification: e.target.value}) : setNewClass({...newClass, classification: e.target.value})} className="w-full border rounded-lg p-2 text-sm outline-none bg-white focus:ring-1 focus:ring-indigo-500">
+               <option value="">-- Chọn phân loại (Không bắt buộc) --</option>
+               {classifications.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+            </select>
             <select value={editingClass ? editingClass.session : newClass.session} onChange={e => editingClass ? setEditingClass({...editingClass, session: e.target.value}) : setNewClass({...newClass, session: e.target.value})} className="w-full border rounded-lg p-2 text-sm outline-none">
                <option value="Sáng">Buổi Sáng</option>
                <option value="Chiều">Buổi Chiều</option>
@@ -742,7 +793,14 @@ function ClassesView({ classes, students, attendance, showToast, importantDates,
                             <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-lg flex items-center justify-center"><BookOpen size={20} /></div>
                             <div>
                                <h3 className="font-bold text-gray-900 leading-tight">{cls.name}</h3>
-                               <p className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded inline-block mt-1">{cls.classCode}</p>
+                               <div className="flex items-center gap-2 mt-1">
+                                  <p className="text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded inline-block">{cls.classCode}</p>
+                                  {cls.classification && (
+                                     <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded inline-flex items-center gap-1 font-bold">
+                                        <BookOpen size={10}/> {cls.classification}
+                                     </span>
+                                  )}
+                               </div>
                             </div>
                          </div>
                          <div className="flex" onClick={(e) => e.stopPropagation()}>
@@ -774,6 +832,7 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
    });
   const [selectedCard, setSelectedCard] = useState(null);
   const [searchQuery, setSearchQuery] = useState(''); // State tìm kiếm học sinh
+  const [gradeFilter, setGradeFilter] = useState(''); // Bộ lọc xếp loại
   const fileInputRef = useRef(null);
   const printRef = useRef(null);
   const [isImporting, setIsImporting] = useState(false);
@@ -1208,11 +1267,47 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
       }
   };
 
+  const downloadFilteredStudents = () => {
+      if (filteredStudents.length === 0) { showToast('Không có dữ liệu', 'error'); return; }
+      let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
+      csvContent += "Mã HS,Họ tên,Lớp,Lớp hệ thống,Trường,SĐT Phụ huynh,Xếp loại,Số buổi biết bơi\n";
+      filteredStudents.forEach(s => {
+         csvContent += `${s.studentCode},${s.fullName},${s.className || ''},${s.systemClassName || 'Chưa có lớp'},${s.school || ''},${s.parentPhone || ''},${s.swimGrade || ''},${s.swimSuccessSessions || ''}\n`;
+      });
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Danh_Sach_${gradeFilter ? gradeFilter.replace(/\s+/g, '_') : 'Hoc_Sinh'}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
+
   // Logic lọc danh sách học sinh theo ô tìm kiếm
+//   const filteredStudents = students.filter(s => {
+//       if (!searchQuery) return true;
+//       const q = searchQuery.toLowerCase();
+//       return (s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q));
+//   });
+   // Logic lọc danh sách học sinh theo ô tìm kiếm và bộ lọc xếp loại
   const filteredStudents = students.filter(s => {
-      if (!searchQuery) return true;
-      const q = searchQuery.toLowerCase();
-      return (s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q));
+      // 1. Kiểm tra điều kiện tìm kiếm bằng text
+      let matchesSearch = true;
+      if (searchQuery) {
+          const q = searchQuery.toLowerCase();
+          matchesSearch = s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q);
+      }
+      
+      // 2. Kiểm tra điều kiện Dropdown bộ lọc
+      let matchesFilter = true;
+      if (gradeFilter === 'Vàng' || gradeFilter === 'Xuất sắc') {
+          matchesFilter = s.swimGrade === gradeFilter;
+      } else if (gradeFilter === 'Nhận quà') {
+          // ParseInt để so sánh số, kiểm tra tồn tại trường số buổi
+          matchesFilter = s.swimSuccessSessions && parseInt(s.swimSuccessSessions) <= 5;
+      }
+
+      return matchesSearch && matchesFilter;
   });
 
   return (
@@ -1250,6 +1345,27 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
             value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
          />
       </div>
+
+      {/* --- THÊM KHỐI BỘ LỌC VÀ NÚT TẢI Ở ĐÂY --- */}
+      <div className="flex justify-between items-center">
+         <select 
+            value={gradeFilter} 
+            onChange={(e) => setGradeFilter(e.target.value)}
+            className="border border-gray-200 rounded-xl py-2 px-3 text-sm outline-none bg-white focus:ring-2 focus:ring-indigo-500 shadow-sm text-gray-700 font-medium"
+         >
+            <option value="">-- Tất cả xếp loại --</option>
+            <option value="Vàng">Xếp loại: Vàng</option>
+            <option value="Xuất sắc">Xếp loại: Xuất sắc</option>
+            <option value="Nhận quà">Nhận quà (Biết bơi ≤ 5 buổi)</option>
+         </select>
+
+         {gradeFilter && (
+            <button onClick={downloadFilteredStudents} className="bg-emerald-50 text-emerald-600 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm hover:bg-emerald-100 transition-colors">
+               <Download size={14}/> Tải DS
+            </button>
+         )}
+      </div>
+      {/* --- KẾT THÚC KHỐI BỘ LỌC --- */}
 
       {(isAdding || editingStudent) && (
         <form onSubmit={editingStudent ? handleUpdateStudent : handleAddStudent} className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
@@ -1321,7 +1437,11 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                 <div className="bg-indigo-50/50 p-2 rounded-lg border border-indigo-50 mt-2">
                    <label className="block text-[10px] font-bold text-indigo-700 mb-2">KIỂM TRA KỸ THUẬT BƠI</label>
                    <div className="space-y-2">
-                       <input type="text" value={editingStudent.swimGrade || ''} onChange={e => setEditingStudent({...editingStudent, swimGrade: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500" placeholder="Xếp loại (VD: Giỏi, Khá, Đạt...)" />
+                       <select value={editingStudent.swimGrade || ''} onChange={e => setEditingStudent({...editingStudent, swimGrade: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 bg-white outline-none">
+                           <option value="">-- Chưa xếp loại --</option>
+                           <option value="Vàng">Vàng</option>
+                           <option value="Xuất sắc">Xuất sắc</option>
+                        </select>
                        
                        <textarea value={editingStudent.teacherComment || ''} onChange={e => setEditingStudent({...editingStudent, teacherComment: e.target.value})} className="w-full border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 min-h-[60px]" placeholder="Nhận xét của giáo viên..."></textarea>
                    </div>
@@ -1420,6 +1540,17 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                       <span className="font-medium text-emerald-600">{studentDetails.swimmingPool || 'Chưa đăng ký'}</span>
                    </div>
 
+                   {/* --- THÊM TRƯỜNG LỚP HỆ THỐNG TẠI ĐÂY --- */}
+                   <div className="flex justify-between border-b border-gray-50 pb-2">
+                      <span className="text-gray-500">Lớp hệ thống</span>
+                      {studentDetails.systemClassName ? (
+                          <span className="font-bold text-blue-600 text-right">{studentDetails.systemClassName}</span>
+                      ) : (
+                          <span className="font-bold text-rose-600 text-right">Chưa có lớp</span>
+                      )}
+                   </div>
+                   {/* --- KẾT THÚC --- */}
+
                    {/* --- THÔNG TIN QUÁ TRÌNH HỌC TẬP --- */}
                    <div className="bg-gray-50 rounded-xl p-3 space-y-2 mt-4 border border-gray-100">
                        <div className="flex justify-between items-center">
@@ -1484,7 +1615,19 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                            <span className="text-gray-600 text-xs">Xếp loại:</span>
                            <span className="font-bold text-emerald-600">{studentDetails.swimGrade || 'Chưa xếp loại'}</span>
                        </div>
-                       <div className="mt-2">
+                       
+                       {/* --- THÊM KHỐI TUYÊN DƯƠNG Ở ĐÂY --- */}
+                       {studentDetails.swimSuccessSessions && parseInt(studentDetails.swimSuccessSessions) <= 5 && (
+                           <div className="flex justify-between mb-1 mt-1.5">
+                               <span className="text-gray-600 text-xs">Tuyên dương:</span>
+                               <span className="font-bold text-rose-600 bg-rose-100 px-2 py-0.5 rounded text-[10px] flex items-center gap-1">
+                                   Nhận quà 🎁
+                               </span>
+                           </div>
+                       )}
+                       {/* --- KẾT THÚC KHỐI TUYÊN DƯƠNG --- */}
+
+                       <div className="mt-2 pt-2 border-t border-indigo-100/50">
                            <span className="text-gray-600 text-xs block mb-1">Nhận xét của giáo viên:</span>
                            <p className="text-xs text-gray-800 bg-white p-2 rounded border border-indigo-100 italic">
                                {studentDetails.teacherComment || 'Chưa có nhận xét.'}
@@ -2062,9 +2205,9 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
 //   );
 // }
 
-function ImportantDatesView({ onBack, classes, students, importantDates, db, appId, showToast }) {
+function ImportantDatesView({ onBack, classes, students, importantDates, db, appId, showToast, classifications }) {
   const [isAdding, setIsAdding] = useState(false);
-  const [newDate, setNewDate] = useState({ date: '', name: '' });
+  const [newDate, setNewDate] = useState({ date: '', name: '', startTime: '', endTime: '', classification: '', eventType: '' });
   const [selectedDate, setSelectedDate] = useState(null);
   const [stats, setStats] = useState(null);
   const [searchClass, setSearchClass] = useState('');
@@ -2096,8 +2239,8 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
     try {
       const dateRef = doc(db, 'artifacts', appId, 'public', 'data', 'important_dates', editingDate.id);
       await updateDoc(dateRef, {
-        date: editingDate.date,
-        name: editingDate.name
+        date: editingDate.date, name: editingDate.name, startTime: editingDate.startTime || '', endTime: editingDate.endTime || '',
+        classification: editingDate.classification || '', eventType: editingDate.eventType || ''
       });
       setEditingDate(null);
       showToast('Đã cập nhật lịch thành công!');
@@ -2108,20 +2251,70 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
     setSelectedDate(dateObj);
     setIsLoadingStats(true);
     try {
-      // Truy xuất điểm danh đúng ngày đó
       const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), where('dateString', '==', dateObj.date));
       const snap = await getDocs(q);
-      const attendedStudentIds = snap.docs.map(d => d.data().studentId);
+      const allLogs = snap.docs.map(d => d.data());
       
       let totalJoined = 0;
       let totalMissed = 0;
-      const classStats = classes.map(cls => {
+
+      // 1. Chỉ lấy ra các lớp thuộc Phân loại được chọn (Nếu có)
+      let relevantClasses = classes;
+      if (dateObj.classification) {
+          relevantClasses = classes.filter(c => c.classification === dateObj.classification);
+      }
+      
+      const classStats = relevantClasses.map(cls => {
+         let startMs = 0;
+         let endMs = Infinity;
+
+         // SETUP KHUNG GIỜ MẶC ĐỊNH CHO LỚP BÌNH THƯỜNG
+         if (dateObj.startTime && dateObj.endTime) {
+            startMs = new Date(`${dateObj.date}T${dateObj.startTime}:00`).getTime();
+            endMs = new Date(`${dateObj.date}T${dateObj.endTime}:00`).getTime();
+         }
+
+         // GHI ĐÈ LOGIC RIÊNG CHO PHÂN LOẠI "BƠI"
+         if (dateObj.classification === 'Bơi') {
+             if (cls.name.includes('Võ Trường Toản')) {
+                 if (dateObj.eventType === 'Học KNPCĐN') {
+                     startMs = new Date(`${dateObj.date}T07:30:00`).getTime();
+                     endMs = new Date(`${dateObj.date}T09:00:00`).getTime();
+                 } else if (dateObj.eventType === 'Thi bơi') {
+                     startMs = new Date(`${dateObj.date}T09:00:00`).getTime();
+                     endMs = new Date(`${dateObj.date}T10:00:00`).getTime();
+                 }
+             } else if (cls.name.includes('An Bình')) {
+                 if (dateObj.eventType === 'Học KNPCĐN') {
+                     startMs = new Date(`${dateObj.date}T13:30:00`).getTime();
+                     endMs = new Date(`${dateObj.date}T15:00:00`).getTime();
+                 } else if (dateObj.eventType === 'Thi bơi') {
+                     startMs = new Date(`${dateObj.date}T15:00:00`).getTime();
+                     endMs = new Date(`${dateObj.date}T16:00:00`).getTime();
+                 }
+             }
+         }
+
+         // CHỈ LẤY CÁC LOG TRONG KHUNG GIỜ CỦA LỚP NÀY
+         const validLogsForClass = {};
+         allLogs.forEach(data => {
+            if (data.timestamp >= startMs && data.timestamp <= endMs) {
+                validLogsForClass[data.studentId] = data.timestamp;
+            }
+         });
+         const attendedStudentIds = Object.keys(validLogsForClass);
+         
          const classStudents = students.filter(s => s.classId === cls.id);
-         const joined = classStudents.filter(s => attendedStudentIds.includes(s.id));
+         const joined = classStudents
+             .filter(s => attendedStudentIds.includes(s.id))
+             .map(s => ({ ...s, joinTime: new Date(validLogsForClass[s.id]).toLocaleTimeString('vi-VN') }));
+             
          const missed = classStudents.filter(s => !attendedStudentIds.includes(s.id));
+         
          totalJoined += joined.length;
          totalMissed += missed.length;
-         return { ...cls, joined: joined.length, missed: missed.length, missedList: missed };
+         
+         return { ...cls, joined: joined.length, missed: missed.length, missedList: missed, joinedList: joined };
       });
       
       setStats({ totalJoined, totalMissed, classStats });
@@ -2129,6 +2322,23 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
       showToast('Lỗi tải thống kê', 'error');
     }
     setIsLoadingStats(false);
+  };
+
+  // HÀM MỚI: Tải danh sách đã tham gia
+  const downloadJoinedList = (clsName, joinedList) => {
+      if (joinedList.length === 0) { showToast('Không có học sinh nào tham gia', 'error'); return; }
+      let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
+      csvContent += "Mã HS,Họ tên,Lớp,SĐT Phụ huynh,Thời gian tham gia\n";
+      joinedList.forEach(s => {
+          csvContent += `${s.studentCode},${s.fullName},${s.className || ''},${s.parentPhone || ''},${s.joinTime}\n`;
+      });
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Tham_Gia_${clsName.replace(/\s+/g, '_')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
   };
 
   const downloadMissedList = (clsName, missedList) => {
@@ -2181,10 +2391,12 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
                                          <span className="text-rose-600 font-medium">Vắng: {cls.missed}</span>
                                      </div>
                                  </div>
-                                 <button onClick={() => downloadMissedList(cls.name, cls.missedList)} className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg flex flex-col items-center gap-1 transition-colors">
-                                     <Download size={14}/>
-                                     <span className="text-[9px] font-bold">Tải DS Vắng</span>
-                                 </button>
+                                 <div className="flex gap-2">
+                                    <button onClick={() => downloadJoinedList(cls.name, cls.joinedList)} className="p-2 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg flex flex-col items-center gap-1 transition-colors">
+                                          <Download size={14}/>
+                                          <span className="text-[9px] font-bold">Tải DS Tham Gia</span>
+                                    </button>
+                                 </div>
                              </div>
                          ))}
                      </div>
@@ -2212,6 +2424,40 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
             <div className="grid grid-cols-2 gap-3">
                <input type="date" value={editingDate ? editingDate.date : newDate.date} onChange={e => editingDate ? setEditingDate({...editingDate, date: e.target.value}) : setNewDate({...newDate, date: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white" required />
                <input type="text" value={editingDate ? editingDate.name : newDate.name} onChange={e => editingDate ? setEditingDate({...editingDate, name: e.target.value}) : setNewDate({...newDate, name: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none" placeholder="Tên buổi học (VD: Test kỹ thuật)" required />
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+               <div className="flex flex-col">
+                  <label className="text-[10px] text-gray-500 font-bold mb-1">THỜI GIAN BẮT ĐẦU</label>
+                  <input type="time" value={editingDate ? editingDate.startTime || '' : newDate.startTime} onChange={e => editingDate ? setEditingDate({...editingDate, startTime: e.target.value}) : setNewDate({...newDate, startTime: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white" required />
+               </div>
+               <div className="flex flex-col">
+                  <label className="text-[10px] text-gray-500 font-bold mb-1">THỜI GIAN KẾT THÚC</label>
+                  <input type="time" value={editingDate ? editingDate.endTime || '' : newDate.endTime} onChange={e => editingDate ? setEditingDate({...editingDate, endTime: e.target.value}) : setNewDate({...newDate, endTime: e.target.value})} className="border rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white" required />
+               </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-3">
+               <div className="flex flex-col">
+                  <label className="text-[10px] text-gray-500 font-bold mb-1">PHÂN LOẠI</label>
+                  <select value={editingDate ? editingDate.classification || '' : newDate.classification} onChange={e => {
+                      const val = e.target.value;
+                      if(editingDate) setEditingDate({...editingDate, classification: val, eventType: val !== 'Bơi' ? '' : editingDate.eventType});
+                      else setNewDate({...newDate, classification: val, eventType: val !== 'Bơi' ? '' : newDate.eventType});
+                  }} className="border rounded-lg p-2 text-sm outline-none bg-white focus:ring-1 focus:ring-indigo-500">
+                     <option value="">-- Áp dụng toàn trường --</option>
+                     {classifications.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  </select>
+               </div>
+               
+               {((editingDate && editingDate.classification === 'Bơi') || (!editingDate && newDate.classification === 'Bơi')) && (
+                   <div className="flex flex-col">
+                      <label className="text-[10px] text-gray-500 font-bold mb-1">NỘI DUNG BƠI</label>
+                      <select value={editingDate ? editingDate.eventType || '' : newDate.eventType} onChange={e => editingDate ? setEditingDate({...editingDate, eventType: e.target.value}) : setNewDate({...newDate, eventType: e.target.value})} className="border rounded-lg p-2 text-sm outline-none bg-white focus:ring-1 focus:ring-indigo-500">
+                         <option value="">-- Chọn nội dung --</option>
+                         <option value="Học KNPCĐN">Học KNPCĐN</option>
+                         <option value="Thi bơi">Thi bơi</option>
+                      </select>
+                   </div>
+               )}
             </div>
             <div className="flex gap-2">
                <button type="submit" className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-bold">{editingDate ? 'Lưu' : 'Tạo mới'}</button>
