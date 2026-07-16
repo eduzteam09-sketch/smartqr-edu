@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, signOut, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, query, where, getDocs } from 'firebase/firestore';
-import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp, Download, Archive } from 'lucide-react';
+import { Users, QrCode, LayoutDashboard, History, UserPlus, Scan, CheckCircle, XCircle, AlertCircle, Trash2, Upload, Loader2, Printer, BookOpen, Edit2, UserMinus, ChevronLeft, Search, Eye, Lock, LogOut, ArrowDownUp, Download, Archive, Trophy, Award } from 'lucide-react';
 
 // ==========================================
 // CẤU HÌNH FIREBASE THEO CHUẨN MÔI TRƯỜNG
@@ -40,6 +40,7 @@ export default function App() {
   const [classifications, setClassifications] = useState([]);
   const [activeTab, setActiveTab] = useState('scanner');
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const [tournaments, setTournaments] = useState([]);
 
   // TÍCH HỢP TAILWIND CSS TRỰC TIẾP VÀO COMPONENT
   useEffect(() => {
@@ -133,12 +134,20 @@ export default function App() {
       setImportantDates(data);
     }, (error) => console.error(error));
 
+    const tourRef = collection(db, 'artifacts', appId, 'public', 'data', 'tournaments');
+    const unsubTour = onSnapshot(tourRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      data.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setTournaments(data);
+    }, (error) => console.error(error));
+
     return () => {
       unsubStudents();
       unsubAttendance();
       unsubClasses();
       unsubClassif();
       unsubDates();
+      unsubTour();
     };
   }, [user]);
 
@@ -153,6 +162,7 @@ export default function App() {
   const stats = {
     total: students.length,
     totalClasses: classes.length,
+    totalTournaments: tournaments.length, // THÊM DÒNG NÀY
     present: todayAttendance.length,
     absent: students.length - todayAttendance.length,
     percentage: students.length === 0 ? 0 : Math.round((todayAttendance.length / students.length) * 100)
@@ -196,9 +206,10 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto bg-gray-50 pb-24">
         <div className="max-w-md mx-auto px-4 py-6">
-          {activeTab === 'dashboard' && <DashboardView stats={stats} />}
+          {activeTab === 'dashboard' && <DashboardView stats={stats} setActiveTab={setActiveTab} />}
+          {activeTab === 'tournaments' && <TournamentsView tournaments={tournaments} students={students} db={db} appId={appId} showToast={showToast} setActiveTab={setActiveTab} />}
           {activeTab === 'classes' && <ClassesView classes={classes} students={students} attendance={todayAttendance} showToast={showToast} importantDates={importantDates} db={db} appId={appId} classifications={classifications} />}
-          {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} importantDates={importantDates} db={db} appId={appId} />}
+          {activeTab === 'students' && <StudentsView students={students} classes={classes} user={user} showToast={showToast} importantDates={importantDates} db={db} appId={appId} tournaments={tournaments} />}
           {activeTab === 'scanner' && <ScannerView students={students} attendance={attendance} user={user} showToast={showToast} />}
           {activeTab === 'history' && <HistoryView attendance={todayAttendance} students={students} />}
         </div>
@@ -328,7 +339,7 @@ function LoginView({ auth, showToast, toast }) {
   );
 }
 
-function DashboardView({ stats }) {
+function DashboardView({ stats, setActiveTab }) {
   return (
     <div className="space-y-4 animate-in fade-in duration-500">
       <h2 className="text-xl font-bold text-gray-800">Hôm nay, {new Date().toLocaleDateString('vi-VN')}</h2>
@@ -344,6 +355,20 @@ function DashboardView({ stats }) {
                <p className="text-2xl font-bold text-purple-700 leading-none">{stats.totalClasses}</p>
             </div>
          </div>
+      </div>
+
+      {/* Thẻ Tổng số Giải bơi */}
+      <div onClick={() => setActiveTab('tournaments')} className="bg-white p-4 rounded-2xl shadow-sm border border-orange-100 flex items-center justify-between cursor-pointer hover:bg-orange-50 transition-colors mt-4">
+         <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-orange-100 text-orange-600 rounded-full flex items-center justify-center shrink-0">
+               <Trophy size={24}/>
+            </div>
+            <div>
+               <p className="text-xs text-gray-500 font-medium uppercase mb-0.5">Tổng số giải bơi</p>
+               <p className="text-2xl font-bold text-orange-700 leading-none">{stats.totalTournaments}</p>
+            </div>
+         </div>
+         <ChevronLeft size={20} className="text-orange-300 rotate-180" />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -821,14 +846,14 @@ function ClassesView({ classes, students, attendance, showToast, importantDates,
   );
 }
 
-function StudentsView({ students, classes, showToast, importantDates, db, appId }) {
+function StudentsView({ students, classes, showToast, importantDates, db, appId, tournaments }) {
   const [isAdding, setIsAdding] = useState(false);
   const [editingStudent, setEditingStudent] = useState(null);
   const [studentDetails, setStudentDetails] = useState(null);
   const [newStudent, setNewStudent] = useState({ 
    fullName: '', className: '', studentCode: '', avatar: '', school: '', 
    parentPhone: '', swimmingPool: '', admissionDate: '', 
-   swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '' 
+   swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '', gender: '' 
    });
   const [selectedCard, setSelectedCard] = useState(null);
   const [searchQuery, setSearchQuery] = useState(''); // State tìm kiếm học sinh
@@ -1045,7 +1070,7 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
       setNewStudent({ 
          fullName: '', className: '', studentCode: '', avatar: '', school: '', 
          parentPhone: '', swimmingPool: '', admissionDate: '', 
-         swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '' 
+         swimSuccessSessions: '', endDate: '', swimGrade: '', teacherComment: '', gender: '' 
       });
       setIsAdding(false);
       showToast('Thêm học sinh thành công!');
@@ -1124,14 +1149,59 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
       return;
     }
 
-    // Tạo một khung HTML ẩn chứa giao diện hồ sơ để xuất PDF (sử dụng style inline chuẩn CSS)
+    // --- TẠO HTML CHO LỊCH QUAN TRỌNG ---
+    let importantDatesHtml = '';
+    if (importantDates && importantDates.length > 0) {
+        importantDatesHtml = importantDates.map(dateObj => {
+            const isAttended = profileAttendance.includes(dateObj.date);
+            const isPast = new Date(dateObj.date).setHours(0,0,0,0) <= new Date().setHours(0,0,0,0);
+            let statusText = " - ";
+            let statusColor = "#9ca3af"; // Xám
+            if (isAttended) {
+                statusText = "Đã tham gia";
+                statusColor = "#059669"; // Xanh ngọc
+            } else if (isPast) {
+                statusText = "Không tham gia";
+                statusColor = "#e11d48"; // Đỏ
+            }
+            return `<div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px dashed #eee; padding: 8px 0;">
+                <span style="color: #555; font-size: 14px; flex: 1; padding-right: 15px; word-wrap: break-word;">${new Date(dateObj.date).toLocaleDateString('vi-VN')} - ${dateObj.name}</span>
+                <span style="color: ${statusColor}; font-weight: bold; font-size: 14px; white-space: nowrap; flex-shrink: 0; margin-top: 2px;">${statusText}</span>
+            </div>`;
+        }).join('');
+    } else {
+        importantDatesHtml = `<p style="color:#9ca3af; font-size: 14px; font-style: italic;">Chưa có lịch quan trọng nào.</p>`;
+    }
+
+    // --- TẠO HTML CHO GIẢI BƠI ---
+    let tournamentsHtml = '';
+    if (tournaments) {
+        const studentTours = tournaments.filter(t => t.participants && t.participants[studentDetails.id] !== undefined);
+        if (studentTours.length > 0) {
+            const rows = studentTours.map(t => {
+                const rank = t.participants[studentDetails.id];
+                const displayRank = rank ? (rank.includes('Nh') ? 'Nhận quà' : rank) : 'Chưa xếp loại';
+                const color = rank === 'Vàng' ? '#ca8a04' : rank === 'Xuất sắc' ? '#2563eb' : rank ? '#e11d48' : '#9ca3af';
+                return `<div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px dashed #eee; padding: 8px 0;">
+                    <span style="color: #555; font-size: 14px; flex: 1; padding-right: 15px; word-wrap: break-word;">${t.name}</span>
+                    <span style="color: ${color}; font-weight: bold; font-size: 14px; white-space: nowrap; flex-shrink: 0; margin-top: 2px;">${displayRank}</span>
+                </div>`;
+            }).join('');
+            tournamentsHtml = `
+                <h3 style="margin-top: 30px; color: #ea580c; border-bottom: 1px solid #ffedd5; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">GIẢI BƠI THAM GIA</h3>
+                ${rows}
+            `;
+        }
+    }
+
+    // Tạo một khung HTML ẩn chứa giao diện hồ sơ để xuất PDF
     const element = document.createElement('div');
     element.innerHTML = `
         <div style="font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto;">
             <div style="text-align: center; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px;">
                 <h1 style="color: #4f46e5; margin: 0 0 10px 0; font-size: 24px;">HỒ SƠ HỌC SINH</h1>
                 <h2 style="margin:0; font-size: 22px;">${studentDetails.fullName}</h2>
-                <p style="color:#666; margin-top:5px;">Mã HS: ${studentDetails.studentCode}</p>
+                <p style="color:#666; margin-top:5px;">Mã HS: ${studentDetails.studentCode} ${studentDetails.gender ? `| Giới tính: ${studentDetails.gender}` : ''}</p>
             </div>
             
             <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">THÔNG TIN CƠ BẢN</h3>
@@ -1145,9 +1215,19 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
             <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Chuyên cần (đã học):</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.totalAttendance || 0} buổi</span></div>
             <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Số buổi bé biết bơi:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.swimSuccessSessions ? studentDetails.swimSuccessSessions + ' buổi' : 'Chưa cập nhật'}</span></div>
             <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày kết thúc khóa:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${studentDetails.endDate ? new Date(studentDetails.endDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span></div>
-            
+            ${tournamentsHtml}
+            <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">LỊCH QUAN TRỌNG</h3>
+            ${importantDatesHtml}
+
             <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">KIỂM TRA KỸ THUẬT BƠI</h3>
             <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Xếp loại:</span> <span style="font-weight: bold; color: #059669; width: 60%; text-align: right;">${studentDetails.swimGrade || 'Chưa xếp loại'}</span></div>
+            
+            ${(studentDetails.swimSuccessSessions && parseInt(studentDetails.swimSuccessSessions) <= 5) ? `
+            <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;">
+                <span style="color: #666; font-weight: bold; width: 40%;">Tuyên dương:</span>
+                <span style="font-weight: bold; color: #e11d48; background-color: #ffe4e6; padding: 2px 8px; border-radius: 4px; font-size: 14px;">Nhận quà 🎁</span>
+            </div>` : ''}
+
             <div style="background: #f9fafb; padding: 15px; border-radius: 8px; margin-top: 10px; font-style: italic;">
                 <strong style="color:#4f46e5;">Nhận xét của giáo viên:</strong><br/>
                 ${studentDetails.teacherComment || 'Chưa có nhận xét.'}
@@ -1157,7 +1237,7 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
 
     // Cấu hình xuất file PDF
     const opt = {
-      margin:       10, // Căn lề giấy
+      margin:       10,
       filename:     `Ho_So_${studentDetails.studentCode}_${studentDetails.fullName}.pdf`,
       image:        { type: 'jpeg', quality: 0.98 },
       html2canvas:  { scale: 2, useCORS: true },
@@ -1165,15 +1245,9 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
     };
 
     showToast('Đang xử lý xuất file PDF...');
-    
     window.html2pdf().set(opt).from(element).save()
-      .then(() => {
-         showToast('Đã lưu file PDF thành công!');
-      })
-      .catch((e) => {
-         console.error(e);
-         showToast('Có lỗi xảy ra khi tạo PDF', 'error');
-      });
+      .then(() => showToast('Đã lưu file PDF thành công!'))
+      .catch((e) => { console.error(e); showToast('Có lỗi xảy ra khi tạo PDF', 'error'); });
   };
 
   const executeExportProfileZip = async (clsId, clsName) => {
@@ -1209,13 +1283,63 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
               const student = targetStudents[i];
               setExportZipProgress({ current: i + 1, total: targetStudents.length });
 
+              // --- TRUY VẤN LỊCH SỬ ĐIỂM DANH CỦA TỪNG HỌC SINH ĐỂ LÀM LỊCH QUAN TRỌNG ---
+              const qLogs = query(collection(db, 'artifacts', appId, 'public', 'data', 'attendance_logs'), where('studentId', '==', student.id));
+              const snapLogs = await getDocs(qLogs);
+              const studentAttendance = snapLogs.docs.map(d => d.data().dateString);
+
+              let importantDatesHtml = '';
+              if (importantDates && importantDates.length > 0) {
+                  importantDatesHtml = importantDates.map(dateObj => {
+                      const isAttended = studentAttendance.includes(dateObj.date);
+                      const isPast = new Date(dateObj.date).setHours(0,0,0,0) <= new Date().setHours(0,0,0,0);
+                      let statusText = " - ";
+                      let statusColor = "#9ca3af";
+                      if (isAttended) {
+                          statusText = "Đã tham gia";
+                          statusColor = "#059669";
+                      } else if (isPast) {
+                          statusText = "Không tham gia";
+                          statusColor = "#e11d48";
+                      }
+                      return `<div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px dashed #eee; padding: 8px 0;">
+                          <span style="color: #555; font-size: 14px; flex: 1; padding-right: 15px; word-wrap: break-word;">${new Date(dateObj.date).toLocaleDateString('vi-VN')} - ${dateObj.name}</span>
+                          <span style="color: ${statusColor}; font-weight: bold; font-size: 14px; white-space: nowrap; flex-shrink: 0; margin-top: 2px;">${statusText}</span>
+                      </div>`;
+                  }).join('');
+              } else {
+                  importantDatesHtml = `<p style="color:#9ca3af; font-size: 14px; font-style: italic;">Chưa có lịch quan trọng nào.</p>`;
+              }
+
+              // --- TẠO HTML CHO GIẢI BƠI (TRONG ZIP) ---
+              let tournamentsHtml = '';
+              if (tournaments) {
+                  const studentTours = tournaments.filter(t => t.participants && t.participants[student.id] !== undefined);
+                  if (studentTours.length > 0) {
+                      const rows = studentTours.map(t => {
+                          const rank = t.participants[student.id];
+                          const displayRank = rank ? (rank.includes('Nh') ? 'Nhận quà' : rank) : 'Chưa xếp loại';
+                          const color = rank === 'Vàng' ? '#ca8a04' : rank === 'Xuất sắc' ? '#2563eb' : rank ? '#e11d48' : '#9ca3af';
+                          return `<div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px dashed #eee; padding: 8px 0;">
+                              <span style="color: #555; font-size: 14px; flex: 1; padding-right: 15px; word-wrap: break-word;">${t.name}</span>
+                              <span style="color: ${color}; font-weight: bold; font-size: 14px; white-space: nowrap; flex-shrink: 0; margin-top: 2px;">${displayRank}</span>
+                          </div>`;
+                      }).join('');
+                      tournamentsHtml = `
+                          <h3 style="margin-top: 30px; color: #ea580c; border-bottom: 1px solid #ffedd5; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">GIẢI BƠI THAM GIA</h3>
+                          ${rows}
+                      `;
+                  }
+              }
+
+              // TẠO GIAO DIỆN HTML (CÓ BỔ SUNG LỊCH VÀ TUYÊN DƯƠNG NHƯ BƯỚC 1)
               const element = document.createElement('div');
               element.innerHTML = `
                   <div style="font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto; background: white;">
                       <div style="text-align: center; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 30px;">
                           <h1 style="color: #4f46e5; margin: 0 0 10px 0; font-size: 24px;">HỒ SƠ HỌC SINH</h1>
                           <h2 style="margin:0; font-size: 22px;">${student.fullName}</h2>
-                          <p style="color:#666; margin-top:5px;">Mã HS: ${student.studentCode}</p>
+                          <p style="color:#666; margin-top:5px;">Mã HS: ${student.studentCode} ${student.gender ? `| Giới tính: ${student.gender}` : ''}</p>
                       </div>
                       <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px;">THÔNG TIN CƠ BẢN</h3>
                       <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Trường học:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.school || '-'}</span></div>
@@ -1227,9 +1351,19 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                       <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Chuyên cần:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.totalAttendance || 0} buổi</span></div>
                       <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Số buổi bé biết bơi:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.swimSuccessSessions ? student.swimSuccessSessions + ' buổi' : 'Chưa cập nhật'}</span></div>
                       <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Ngày kết thúc khóa:</span> <span style="font-weight: bold; color: #111; width: 60%; text-align: right;">${student.endDate ? new Date(student.endDate).toLocaleDateString('vi-VN') : 'Chưa cập nhật'}</span></div>
-                      
+                      ${tournamentsHtml}
+                      <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px; text-transform: uppercase;">LỊCH QUAN TRỌNG</h3>
+                      ${importantDatesHtml}
+
                       <h3 style="margin-top: 30px; color: #4f46e5; border-bottom: 1px solid #e5e7eb; padding-bottom: 8px; font-size: 16px;">KIỂM TRA KỸ THUẬT BƠI</h3>
                       <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;"><span style="color: #666; font-weight: bold; width: 40%;">Xếp loại:</span> <span style="font-weight: bold; color: #059669; width: 60%; text-align: right;">${student.swimGrade || 'Chưa xếp loại'}</span></div>
+                      
+                      ${(student.swimSuccessSessions && parseInt(student.swimSuccessSessions) <= 5) ? `
+                      <div style="display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding: 12px 0;">
+                          <span style="color: #666; font-weight: bold; width: 40%;">Tuyên dương:</span>
+                          <span style="font-weight: bold; color: #e11d48; background-color: #ffe4e6; padding: 2px 8px; border-radius: 4px; font-size: 14px;">Nhận quà 🎁</span>
+                      </div>` : ''}
+
                       <div style="background: #f9fafb; padding: 15px; border-radius: 8px; margin-top: 10px; font-style: italic;">
                           <strong style="color:#4f46e5;">Nhận xét của giáo viên:</strong><br/>
                           ${student.teacherComment || 'Chưa có nhận xét.'}
@@ -1371,9 +1505,19 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
         <form onSubmit={editingStudent ? handleUpdateStudent : handleAddStudent} className="bg-white p-4 rounded-xl border shadow-sm space-y-3">
           <h4 className="font-bold text-sm text-gray-800 border-b pb-2">{editingStudent ? 'Sửa thông tin' : 'Học sinh mới'}</h4>
           
-          <div>
-              <label className="block text-[10px] font-bold text-gray-500 mb-1">HỌ TÊN *</label>
-              <input type="text" value={editingStudent ? editingStudent.fullName : newStudent.fullName} onChange={e => editingStudent ? setEditingStudent({...editingStudent, fullName: e.target.value}) : setNewStudent({...newStudent, fullName: e.target.value})} className="w-full border rounded-lg p-2 text-sm" placeholder="Nguyễn Văn A" required />
+          <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">HỌ TÊN *</label>
+                  <input type="text" value={editingStudent ? editingStudent.fullName : newStudent.fullName} onChange={e => editingStudent ? setEditingStudent({...editingStudent, fullName: e.target.value}) : setNewStudent({...newStudent, fullName: e.target.value})} className="w-full border rounded-lg p-2 text-sm" placeholder="Nguyễn Văn A" required />
+              </div>
+              <div>
+                  <label className="block text-[10px] font-bold text-gray-500 mb-1">GIỚI TÍNH</label>
+                  <select value={editingStudent ? editingStudent.gender || '' : newStudent.gender} onChange={e => editingStudent ? setEditingStudent({...editingStudent, gender: e.target.value}) : setNewStudent({...newStudent, gender: e.target.value})} className="w-full border rounded-lg p-2 text-sm outline-none bg-white focus:ring-1 focus:ring-indigo-500">
+                     <option value="">-- Chọn --</option>
+                     <option value="Nam">Nam</option>
+                     <option value="Nữ">Nữ</option>
+                  </select>
+              </div>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
@@ -1518,7 +1662,10 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                    </div>
                    <div>
                       <h4 className="font-bold text-lg text-gray-900 leading-tight">{studentDetails.fullName}</h4>
-                      <p className="text-sm text-gray-500 font-medium">Mã: {studentDetails.studentCode}</p>
+                      <p className="text-sm text-gray-500 font-medium">
+                          Mã: {studentDetails.studentCode} 
+                          {studentDetails.gender ? ` | Giới tính: ${studentDetails.gender}` : ''}
+                      </p>
                    </div>
                 </div>
                 
@@ -1570,6 +1717,29 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId 
                           <span className="font-bold text-gray-800">{studentDetails.endDate ? new Date(studentDetails.endDate).toLocaleDateString('vi-VN') : '-'}</span>
                        </div>
                    </div>
+
+                   {/* --- THÔNG TIN GIẢI BƠI --- */}
+                   {tournaments && tournaments.some(t => t.participants && t.participants[studentDetails.id] !== undefined) && (
+                       <div className="bg-orange-50/50 rounded-xl p-3 mt-2 border border-orange-100">
+                           <h5 className="text-[10px] font-bold text-orange-600 mb-2 uppercase">Giải Bơi Tham Gia</h5>
+                           <div className="space-y-2">
+                               {tournaments.filter(t => t.participants && t.participants[studentDetails.id] !== undefined).map(t => {
+                                   const rank = t.participants[studentDetails.id];
+                                   const displayRank = rank ? (rank.includes('Nh') ? 'Nhận quà' : rank) : 'Chưa xếp loại';
+                                   return (
+                                       <div key={t.id} className="flex justify-between items-center border-b border-orange-100/50 pb-2 last:border-0 last:pb-0">
+                                           <span className="text-gray-700 text-xs truncate pr-2 font-medium">
+                                               {t.name}
+                                           </span>
+                                           <span className={`text-[10px] font-bold shrink-0 ${rank ? (rank === 'Vàng' ? 'text-yellow-600' : rank === 'Xuất sắc' ? 'text-blue-600' : 'text-rose-600') : 'text-gray-400'}`}>
+                                               {displayRank}
+                                           </span>
+                                       </div>
+                                   )
+                               })}
+                           </div>
+                       </div>
+                   )}
 
                    {/* --- LỊCH QUAN TRỌNG --- */}
                    <div className="bg-white rounded-xl p-3 mt-2 border border-gray-100">
@@ -2268,31 +2438,15 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
          let startMs = 0;
          let endMs = Infinity;
 
-         // SETUP KHUNG GIỜ MẶC ĐỊNH CHO LỚP BÌNH THƯỜNG
+         // TÍNH TOÁN KHUNG GIỜ THAM GIA THEO LỊCH
          if (dateObj.startTime && dateObj.endTime) {
+            // Lấy chính xác từ giờ bắt đầu đến hết phút của giờ kết thúc
             startMs = new Date(`${dateObj.date}T${dateObj.startTime}:00`).getTime();
-            endMs = new Date(`${dateObj.date}T${dateObj.endTime}:00`).getTime();
-         }
-
-         // GHI ĐÈ LOGIC RIÊNG CHO PHÂN LOẠI "BƠI"
-         if (dateObj.classification === 'Bơi') {
-             if (cls.name.includes('Võ Trường Toản')) {
-                 if (dateObj.eventType === 'Học KNPCĐN') {
-                     startMs = new Date(`${dateObj.date}T07:30:00`).getTime();
-                     endMs = new Date(`${dateObj.date}T09:00:00`).getTime();
-                 } else if (dateObj.eventType === 'Thi bơi') {
-                     startMs = new Date(`${dateObj.date}T09:00:00`).getTime();
-                     endMs = new Date(`${dateObj.date}T10:00:00`).getTime();
-                 }
-             } else if (cls.name.includes('An Bình')) {
-                 if (dateObj.eventType === 'Học KNPCĐN') {
-                     startMs = new Date(`${dateObj.date}T13:30:00`).getTime();
-                     endMs = new Date(`${dateObj.date}T15:00:00`).getTime();
-                 } else if (dateObj.eventType === 'Thi bơi') {
-                     startMs = new Date(`${dateObj.date}T15:00:00`).getTime();
-                     endMs = new Date(`${dateObj.date}T16:00:00`).getTime();
-                 }
-             }
+            endMs = new Date(`${dateObj.date}T${dateObj.endTime}:59`).getTime();
+         } else {
+            // Nếu không set khung thời gian, tính trọn vẹn cả ngày đó
+            startMs = new Date(`${dateObj.date}T00:00:00`).getTime();
+            endMs = new Date(`${dateObj.date}T23:59:59`).getTime();
          }
 
          // CHỈ LẤY CÁC LOG TRONG KHUNG GIỜ CỦA LỚP NÀY
@@ -2307,7 +2461,11 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
          const classStudents = students.filter(s => s.classId === cls.id);
          const joined = classStudents
              .filter(s => attendedStudentIds.includes(s.id))
-             .map(s => ({ ...s, joinTime: new Date(validLogsForClass[s.id]).toLocaleTimeString('vi-VN') }));
+             .map(s => ({ 
+                 ...s, 
+                 joinTime: new Date(validLogsForClass[s.id]).toLocaleTimeString('vi-VN'),
+                 joinTimestamp: validLogsForClass[s.id] 
+             }));
              
          const missed = classStudents.filter(s => !attendedStudentIds.includes(s.id));
          
@@ -2327,11 +2485,18 @@ function ImportantDatesView({ onBack, classes, students, importantDates, db, app
   // HÀM MỚI: Tải danh sách đã tham gia
   const downloadJoinedList = (clsName, joinedList) => {
       if (joinedList.length === 0) { showToast('Không có học sinh nào tham gia', 'error'); return; }
+      
+      // TẠO BẢN SAO VÀ SẮP XẾP DANH SÁCH THEO THỜI GIAN TĂNG DẦN
+      const sortedList = [...joinedList].sort((a, b) => a.joinTimestamp - b.joinTimestamp);
+
       let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; 
       csvContent += "Mã HS,Họ tên,Lớp,SĐT Phụ huynh,Thời gian tham gia\n";
-      joinedList.forEach(s => {
+      
+      // SỬ DỤNG sortedList THAY VÌ joinedList ĐỂ DUYỆT DỮ LIỆU
+      sortedList.forEach(s => {
           csvContent += `${s.studentCode},${s.fullName},${s.className || ''},${s.parentPhone || ''},${s.joinTime}\n`;
       });
+      
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
@@ -2911,6 +3076,373 @@ function HistoryView({ attendance, students }) {
             </>
          )}
       </div>
+    </div>
+  );
+}
+
+// ==========================================
+// VIEW QUẢN LÝ GIẢI BƠI
+// ==========================================
+function TournamentsView({ tournaments, students, db, appId, showToast, setActiveTab }) {
+  const [selectedTour, setSelectedTour] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [editingTour, setEditingTour] = useState(null);
+  const [newTour, setNewTour] = useState({ name: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+  
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [studentsToAdd, setStudentsToAdd] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [tourSearchQuery, setTourSearchQuery] = useState('');
+  const [tourRankFilter, setTourRankFilter] = useState('');
+  
+  const [visibleCount, setVisibleCount] = useState(15);
+  const [modalVisibleCount, setModalVisibleCount] = useState(15);
+  const [rankModalInfo, setRankModalInfo] = useState(null);
+
+  const handleSaveTour = async (e) => {
+    e.preventDefault();
+    if (!newTour.name) return showToast('Vui lòng nhập tên giải!', 'error');
+    try {
+      if (editingTour) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', editingTour.id), {
+          name: editingTour.name, startDate: editingTour.startDate, startTime: editingTour.startTime, 
+          endDate: editingTour.endDate, endTime: editingTour.endTime
+        });
+        if (selectedTour?.id === editingTour.id) setSelectedTour({ ...selectedTour, ...editingTour });
+        setEditingTour(null);
+        showToast('Cập nhật giải bơi thành công!');
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'tournaments'), {
+          ...newTour, createdAt: Date.now(), participants: {}
+        });
+        setNewTour({ name: '', startDate: '', startTime: '', endDate: '', endTime: '' });
+        setIsAdding(false);
+        showToast('Tạo giải bơi thành công!');
+      }
+    } catch (e) { showToast('Lỗi lưu dữ liệu', 'error'); }
+  };
+
+  const handleDeleteTour = async (id, name) => {
+    if(window.confirm(`Bạn muốn xóa giải "${name}"? Học sinh sẽ không bị xóa khỏi hệ thống.`)) {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', id));
+      if(selectedTour?.id === id) setSelectedTour(null);
+      showToast('Đã xóa giải bơi');
+    }
+  };
+
+  // --- LOGIC TRONG CHI TIẾT GIẢI BƠI ---
+  const handleAddStudentsToTour = async () => {
+    if (studentsToAdd.length === 0) return;
+    try {
+       const tourRef = doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedTour.id);
+       const updatedParticipants = { ...(selectedTour.participants || {}) };
+       studentsToAdd.forEach(id => {
+          if (!(id in updatedParticipants)) updatedParticipants[id] = ''; // Khởi tạo rỗng (chưa xếp loại)
+       });
+       await updateDoc(tourRef, { participants: updatedParticipants });
+       setSelectedTour({...selectedTour, participants: updatedParticipants});
+       setShowAddStudentModal(false); setStudentsToAdd([]); setSearchQuery('');
+       showToast(`Đã thêm ${studentsToAdd.length} học sinh vào giải!`);
+    } catch (e) { showToast('Lỗi khi thêm học sinh', 'error'); }
+  };
+
+  const handleRemoveStudentFromTour = async (studentId, studentName) => {
+     if(window.confirm(`Xóa ${studentName} khỏi giải bơi này?`)) {
+        try {
+           const tourRef = doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedTour.id);
+           const updatedParticipants = { ...selectedTour.participants };
+           delete updatedParticipants[studentId];
+           await updateDoc(tourRef, { participants: updatedParticipants });
+           setSelectedTour({...selectedTour, participants: updatedParticipants});
+           showToast('Đã xóa học sinh khỏi giải');
+        } catch (e) { showToast('Lỗi khi xóa', 'error'); }
+     }
+  };
+
+  const handleUpdateRank = async (rankValue) => {
+      try {
+         const tourRef = doc(db, 'artifacts', appId, 'public', 'data', 'tournaments', selectedTour.id);
+         const updatedParticipants = { ...selectedTour.participants };
+         updatedParticipants[rankModalInfo.studentId] = rankValue;
+         await updateDoc(tourRef, { participants: updatedParticipants });
+         setSelectedTour({...selectedTour, participants: updatedParticipants});
+         setRankModalInfo(null);
+         showToast('Cập nhật xếp loại thành công!');
+      } catch (e) { showToast('Lỗi cập nhật xếp loại', 'error'); }
+  };
+
+  if (selectedTour) {
+    const participantIds = Object.keys(selectedTour.participants || {});
+    const tourStudents = students.filter(s => participantIds.includes(s.id));
+    
+    // TÍNH TOÁN THỐNG KÊ
+    const rankStats = { 'Vàng': 0, 'Xuất sắc': 0, 'Nhận quà': 0 };
+    tourStudents.forEach(s => {
+        const r = selectedTour.participants[s.id];
+        // Đảm bảo không bị lỗi đếm nếu xếp loại bị sai font chữ (do lỗi UTF-8 cũ)
+        if (r === 'Vàng' || r === 'Xuất sắc' || r === 'Nhận quà' || r?.includes('Nh')) {
+            const key = r?.includes('Nh') ? 'Nhận quà' : r;
+            rankStats[key]++;
+        }
+    });
+
+    // TÌM KIẾM & LỌC TRONG GIẢI
+    const filteredTourStudents = tourStudents.filter(s => {
+       const rank = selectedTour.participants[s.id];
+       // Chuẩn hóa rank để so sánh chính xác với bộ lọc (Phòng hờ lỗi font)
+       const normalizedRank = rank?.includes('Nh') ? 'Nhận quà' : rank;
+       const matchFilter = tourRankFilter ? normalizedRank === tourRankFilter : true;
+       
+       if (!tourSearchQuery) return matchFilter;
+       const q = tourSearchQuery.toLowerCase();
+       const matchSearch = s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q);
+       
+       return matchFilter && matchSearch;
+    });
+    const paginatedStudents = filteredTourStudents.slice(0, visibleCount);
+
+    // Dữ liệu cho Popup Thêm HS
+    const availableStudents = students.filter(s => !participantIds.includes(s.id));
+    const filteredAvailable = availableStudents.filter(s => {
+       if (!searchQuery) return true;
+       const q = searchQuery.toLowerCase();
+       return s.fullName?.toLowerCase().includes(q) || s.studentCode?.toLowerCase().includes(q);
+    });
+
+    return (
+      <div className="space-y-4 animate-in slide-in-from-right-8 duration-300">
+        <div className="flex items-center gap-3 bg-white p-3 rounded-xl shadow-sm border border-orange-100">
+           <button onClick={() => { setSelectedTour(null); setVisibleCount(15); setTourSearchQuery(''); }} className="p-2 bg-orange-50 text-orange-600 rounded-lg">
+              <ChevronLeft size={20} />
+           </button>
+           <div className="overflow-hidden">
+              <h2 className="text-lg font-bold text-gray-800 truncate">{selectedTour.name}</h2>
+              <p className="text-gray-500 text-xs truncate">Sĩ số: {participantIds.length} HS | Từ {new Date(selectedTour.startDate).toLocaleDateString('vi-VN')}</p>
+           </div>
+        </div>
+
+        {/* 1. THỐNG KÊ XẾP LOẠI */}
+        <div className="flex gap-2 text-xs font-bold text-gray-600 mb-1 mt-1">
+            <span className="bg-yellow-50 text-yellow-700 px-2 py-1.5 rounded-lg border border-yellow-200 shadow-sm">Vàng: {rankStats['Vàng']}</span>
+            <span className="bg-blue-50 text-blue-700 px-2 py-1.5 rounded-lg border border-blue-200 shadow-sm">Xuất sắc: {rankStats['Xuất sắc']}</span>
+            <span className="bg-rose-50 text-rose-700 px-2 py-1.5 rounded-lg border border-rose-200 shadow-sm">Nhận quà: {rankStats['Nhận quà']}</span>
+        </div>
+
+        {/* 2. THANH TÌM KIẾM */}
+        <div className="relative mb-3">
+           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+           <input type="text" placeholder="Tìm tên hoặc mã HS trong giải..." className="w-full border border-gray-200 rounded-xl py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-orange-500 outline-none bg-white shadow-sm" value={tourSearchQuery} onChange={(e) => setTourSearchQuery(e.target.value)} />
+        </div>
+
+        {/* 3. BỘ LỌC VÀ NÚT THÊM (CÙNG HÀNG) */}
+        <div className="flex gap-2 mb-4">
+            <select 
+                value={tourRankFilter} 
+                onChange={(e) => setTourRankFilter(e.target.value)}
+                className="w-1/3 border border-gray-200 rounded-xl px-2 py-2 text-[13px] outline-none bg-white focus:ring-2 focus:ring-orange-500 shadow-sm text-gray-700 font-bold"
+            >
+                <option value="">Lọc (Tất cả)</option>
+                <option value="Vàng">Vàng</option>
+                <option value="Xuất sắc">Xuất sắc</option>
+                <option value="Nhận quà">Nhận quà</option>
+            </select>
+            
+            <button onClick={() => { setShowAddStudentModal(true); setModalVisibleCount(15); }} className="w-2/3 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-sm hover:bg-orange-600 transition-colors">
+                <UserPlus size={18}/> Thêm học sinh
+            </button>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col">
+           <div className="divide-y divide-gray-100">
+              {paginatedStudents.length === 0 ? (
+                 <div className="p-6 text-center text-gray-400 text-sm">Chưa có học sinh nào.</div>
+              ) : (
+                 paginatedStudents.map(student => {
+                    const rank = selectedTour.participants[student.id];
+                    return (
+                       <div key={student.id} className="p-3 flex items-center justify-between hover:bg-gray-50">
+                          <div className="flex items-center gap-3 overflow-hidden flex-1">
+                             <div className="w-10 h-10 rounded-full bg-orange-100 text-orange-700 flex justify-center items-center font-bold text-sm shrink-0 border">
+                                {student.avatar ? <img src={student.avatar} className="w-full h-full rounded-full object-cover"/> : student.fullName.charAt(0)}
+                             </div>
+                             <div className="text-left truncate">
+                                <div className="font-medium text-sm text-gray-900 truncate">{student.fullName}</div>
+                                <div className="text-[10px] text-gray-500">{student.studentCode}</div>
+                             </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                             {rank && (
+                                <span className={`text-[10px] font-bold px-2 py-1 rounded border ${rank === 'Vàng' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' : rank === 'Xuất sắc' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                                    {/* Ép text cứng nếu chuỗi bị lỗi font chứa từ "Nh" */}
+                                    {rank.includes('Nh') ? 'Nhận quà' : rank}
+                                </span>
+                             )}
+                             <button onClick={() => setRankModalInfo({ studentId: student.id, name: student.fullName, current: rank })} className="p-1.5 text-gray-400 hover:text-yellow-600 transition-colors bg-white border border-gray-200 shadow-sm rounded-lg" title="Xếp loại">
+                                <Award size={16}/>
+                             </button>
+                             <button onClick={() => handleRemoveStudentFromTour(student.id, student.fullName)} className="p-1.5 text-gray-400 hover:text-rose-500 transition-colors bg-white border border-gray-200 shadow-sm rounded-lg" title="Xóa khỏi giải">
+                                <UserMinus size={16}/>
+                             </button>
+                          </div>
+                       </div>
+                    )
+                 })
+              )}
+              {visibleCount < filteredTourStudents.length && (
+                 <div className="p-3 bg-gray-50/50 flex justify-center">
+                    <button onClick={() => setVisibleCount(prev => prev + 15)} className="px-4 py-1.5 bg-white border border-gray-200 text-orange-600 text-xs font-bold rounded-full shadow-sm hover:bg-orange-50 transition-colors">
+                       Xem thêm {filteredTourStudents.length - visibleCount} học sinh...
+                    </button>
+                 </div>
+              )}
+           </div>
+        </div>
+
+        {/* MODAL XẾP LOẠI */}
+        {rankModalInfo && (
+           <div className="fixed inset-0 bg-black/60 z-[80] flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl w-full max-w-[280px] shadow-xl overflow-hidden animate-in zoom-in-95 duration-200 p-5 text-center">
+                 <div className="mx-auto w-12 h-12 bg-yellow-100 text-yellow-600 flex items-center justify-center rounded-full mb-3"><Award size={24}/></div>
+                 <h3 className="font-bold text-gray-900 mb-1">Xếp loại học sinh</h3>
+                 <p className="text-xs text-gray-500 mb-4">{rankModalInfo.name}</p>
+                 <div className="flex flex-col gap-2">
+                    <button onClick={() => handleUpdateRank('Vàng')} className="w-full py-2.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border border-yellow-200 font-bold rounded-xl text-sm transition-colors">Vàng</button>
+                    <button onClick={() => handleUpdateRank('Xuất sắc')} className="w-full py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold rounded-xl text-sm transition-colors">Xuất sắc</button>
+                    <button onClick={() => handleUpdateRank('Nhận quà')} className="w-full py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold rounded-xl text-sm transition-colors">Nhận quà 🎁</button>
+                    <button onClick={() => handleUpdateRank('')} className="w-full py-2.5 bg-gray-50 hover:bg-gray-100 text-gray-600 border border-gray-200 font-bold rounded-xl text-sm mt-2 transition-colors">Bỏ xếp loại</button>
+                 </div>
+                 <button onClick={() => setRankModalInfo(null)} className="mt-4 text-sm text-gray-400 font-bold w-full py-2 hover:bg-gray-50 rounded-xl">Đóng</button>
+              </div>
+           </div>
+        )}
+
+        {/* Modal thêm học sinh */}
+        {showAddStudentModal && (
+           <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl w-full max-w-sm shadow-xl flex flex-col max-h-[80vh] overflow-hidden">
+                 <div className="p-4 border-b">
+                    <h3 className="font-bold text-lg text-orange-600">Thêm HS vào giải</h3>
+                 </div>
+                 <div className="p-4 flex-1 flex flex-col min-h-0">
+                    <div className="relative mb-3 shrink-0">
+                       <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                       <input type="text" placeholder="Tìm tên hoặc mã trên toàn hệ thống..." className="w-full border border-gray-300 rounded-lg py-2 pl-9 pr-3 text-sm focus:ring-2 focus:ring-orange-500 outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                    </div>
+                    <div className="flex-1 overflow-y-auto border border-gray-100 rounded-lg">
+                       {filteredAvailable.length === 0 ? (
+                          <div className="p-4 text-center text-gray-500 text-xs">Không tìm thấy học sinh.</div>
+                       ) : (
+                          <ul className="divide-y divide-gray-50">
+                             {filteredAvailable.slice(0, modalVisibleCount).map(s => {
+                                const isSelected = studentsToAdd.includes(s.id);
+                                return (
+                                   <li key={s.id} onClick={() => setStudentsToAdd(prev => prev.includes(s.id) ? prev.filter(id => id !== s.id) : [...prev, s.id])} className={`p-3 text-sm cursor-pointer flex justify-between items-center transition-colors ${isSelected ? 'bg-orange-50' : 'hover:bg-gray-50'}`}>
+                                      <div>
+                                         <div className="font-medium text-gray-800">{s.fullName}</div>
+                                         <div className="text-[10px] text-gray-500">{s.studentCode} {s.systemClassName ? `(${s.systemClassName})` : ''}</div>
+                                      </div>
+                                      <div className={`w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-orange-500 border-orange-500' : 'border-gray-300'}`}>
+                                         {isSelected && <CheckCircle size={14} className="text-white" />}
+                                      </div>
+                                   </li>
+                                )
+                             })}
+                          </ul>
+                       )}
+                       {modalVisibleCount < filteredAvailable.length && (
+                          <div className="p-3 text-center bg-gray-50 shrink-0 border-t border-gray-100">
+                             <button onClick={() => setModalVisibleCount(prev => prev + 15)} className="px-4 py-1.5 bg-white border border-gray-200 text-orange-600 text-xs font-bold rounded-full shadow-sm hover:bg-orange-50 transition-colors">
+                                Xem thêm...
+                             </button>
+                          </div>
+                       )}
+                    </div>
+                 </div>
+                 <div className="p-4 border-t bg-gray-50 flex justify-between items-center shrink-0">
+                    <div className="text-xs text-orange-600 font-bold">Đã chọn: {studentsToAdd.length}</div>
+                    <div className="flex gap-2">
+                       <button onClick={() => { setShowAddStudentModal(false); setStudentsToAdd([]); }} className="px-4 py-2 text-sm bg-white border rounded-lg font-medium shadow-sm">Hủy</button>
+                       <button onClick={handleAddStudentsToTour} disabled={studentsToAdd.length === 0} className="px-4 py-2 text-sm bg-orange-500 text-white rounded-lg font-bold disabled:opacity-50 shadow-sm">Thêm vào giải</button>
+                    </div>
+                 </div>
+              </div>
+           </div>
+        )}
+      </div>
+    );
+  }
+
+  // GIAO DIỆN CHÍNH (LIST GIẢI BƠI)
+  return (
+    <div className="space-y-4 animate-in fade-in">
+       <div className="flex items-center justify-between bg-white p-3 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center gap-3">
+             <button onClick={() => setActiveTab('dashboard')} className="p-2 bg-gray-50 rounded-lg text-gray-600"><ChevronLeft size={20} /></button>
+             <h3 className="font-bold text-gray-800">Quản lý Giải Bơi</h3>
+          </div>
+          <button onClick={() => {setIsAdding(!isAdding); setEditingTour(null);}} className="bg-orange-50 text-orange-600 px-3 py-2 rounded-xl text-xs font-bold shadow-sm">
+             {isAdding ? 'Đóng' : '+ Tạo giải'}
+          </button>
+       </div>
+
+       {(isAdding || editingTour) && (
+         <form onSubmit={handleSaveTour} className="bg-white p-4 rounded-2xl shadow-sm border border-orange-200 space-y-3">
+            <h4 className="text-sm font-bold text-orange-800 flex items-center gap-2">
+               <Trophy size={16} /> {editingTour ? 'Sửa thông tin giải' : 'Tạo giải bơi mới'}
+            </h4>
+            <input type="text" value={editingTour ? editingTour.name : newTour.name} onChange={e => editingTour ? setEditingTour({...editingTour, name: e.target.value}) : setNewTour({...newTour, name: e.target.value})} className="w-full border rounded-lg p-2.5 text-sm outline-none focus:ring-2 focus:ring-orange-500 bg-gray-50" placeholder="Tên giải bơi (VD: Giải bơi hè 2026)" required />
+            
+            <div className="grid grid-cols-2 gap-3 mt-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+               <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase text-center bg-white py-1 rounded border">Bắt đầu</label>
+                  <input type="date" value={editingTour ? editingTour.startDate : newTour.startDate} onChange={e => editingTour ? setEditingTour({...editingTour, startDate: e.target.value}) : setNewTour({...newTour, startDate: e.target.value})} className="border rounded-lg p-1.5 text-xs outline-none focus:border-orange-500" required />
+                  <input type="time" value={editingTour ? editingTour.startTime : newTour.startTime} onChange={e => editingTour ? setEditingTour({...editingTour, startTime: e.target.value}) : setNewTour({...newTour, startTime: e.target.value})} className="border rounded-lg p-1.5 text-xs outline-none focus:border-orange-500" required />
+               </div>
+               <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-gray-500 font-bold uppercase text-center bg-white py-1 rounded border">Kết thúc</label>
+                  <input type="date" value={editingTour ? editingTour.endDate : newTour.endDate} onChange={e => editingTour ? setEditingTour({...editingTour, endDate: e.target.value}) : setNewTour({...newTour, endDate: e.target.value})} className="border rounded-lg p-1.5 text-xs outline-none focus:border-orange-500" required />
+                  <input type="time" value={editingTour ? editingTour.endTime : newTour.endTime} onChange={e => editingTour ? setEditingTour({...editingTour, endTime: e.target.value}) : setNewTour({...newTour, endTime: e.target.value})} className="border rounded-lg p-1.5 text-xs outline-none focus:border-orange-500" required />
+               </div>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+               <button type="submit" className="flex-1 bg-orange-500 text-white py-2.5 rounded-xl text-sm font-bold hover:bg-orange-600 transition-colors shadow-sm">{editingTour ? 'Lưu cập nhật' : 'Tạo giải'}</button>
+               {editingTour && <button type="button" onClick={() => setEditingTour(null)} className="px-5 bg-gray-100 rounded-xl text-sm font-bold text-gray-600">Hủy</button>}
+            </div>
+         </form>
+       )}
+
+       <div className="space-y-3">
+          {tournaments.length === 0 ? (
+             <div className="text-center p-8 text-gray-400 text-sm bg-white rounded-2xl shadow-sm border border-dashed border-gray-200">Chưa có giải bơi nào.</div>
+          ) : (
+             tournaments.map(tour => {
+                const count = Object.keys(tour.participants || {}).length;
+                return (
+                   <div key={tour.id} className="bg-white border rounded-2xl p-4 flex flex-col shadow-sm cursor-pointer hover:border-orange-300 transition-colors group" onClick={() => { setSelectedTour(tour); setVisibleCount(15); setTourSearchQuery(''); }}>
+                      <div className="flex justify-between items-start mb-3">
+                         <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 bg-orange-50 text-orange-500 rounded-2xl flex items-center justify-center group-hover:bg-orange-500 group-hover:text-white transition-colors"><Trophy size={24} /></div>
+                            <div>
+                               <h3 className="font-bold text-gray-900 leading-tight">{tour.name}</h3>
+                               <p className="text-[10px] text-gray-500 mt-1">Từ: {new Date(tour.startDate).toLocaleDateString('vi-VN')} {tour.startTime}</p>
+                            </div>
+                         </div>
+                         <div className="flex" onClick={(e) => e.stopPropagation()}>
+                            <button onClick={() => {setEditingTour(tour); setIsAdding(false); window.scrollTo({top:0});}} className="p-2 text-gray-400 hover:text-blue-600 bg-gray-50 rounded-lg ml-1"><Edit2 size={14}/></button>
+                            <button onClick={() => handleDeleteTour(tour.id, tour.name)} className="p-2 text-gray-400 hover:text-rose-600 bg-gray-50 rounded-lg ml-1"><Trash2 size={14}/></button>
+                         </div>
+                      </div>
+                      <div className="flex justify-between items-center text-xs pt-3 border-t border-gray-50">
+                         <span className="text-gray-500 bg-gray-100 px-2 py-1 rounded-md">Đến: {new Date(tour.endDate).toLocaleDateString('vi-VN')} {tour.endTime}</span>
+                         <span className="font-bold text-orange-600 bg-orange-50 px-3 py-1 rounded-md">{count} Học sinh</span>
+                      </div>
+                   </div>
+                )
+             })
+          )}
+       </div>
     </div>
   );
 }
