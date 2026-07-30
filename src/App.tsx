@@ -1433,9 +1433,21 @@ function StudentsView({ students, classes, showToast, importantDates, db, appId,
       }
       
       // 2. Kiểm tra điều kiện Dropdown bộ lọc
+      // let matchesFilter = true;
+      // if (gradeFilter === 'Vàng' || gradeFilter === 'Xuất sắc') {
+      //     matchesFilter = s.swimGrade === gradeFilter;
+      // } else if (gradeFilter === 'Nhận quà') {
+      //     // ParseInt để so sánh số, kiểm tra tồn tại trường số buổi
+      //     matchesFilter = s.swimSuccessSessions && parseInt(s.swimSuccessSessions) <= 5;
+      // }
+
+    // 2. Kiểm tra điều kiện Dropdown bộ lọc
       let matchesFilter = true;
-      if (gradeFilter === 'Vàng' || gradeFilter === 'Xuất sắc') {
-          matchesFilter = s.swimGrade === gradeFilter;
+      if (gradeFilter === 'Vàng') {
+          // Bao gồm cả "Vàng" hoa và "vàng" thường
+          matchesFilter = s.swimGrade === 'Vàng' || s.swimGrade === 'vàng';
+      } else if (gradeFilter === 'Xuất sắc') {
+          matchesFilter = s.swimGrade === 'Xuất sắc';
       } else if (gradeFilter === 'Nhận quà') {
           // ParseInt để so sánh số, kiểm tra tồn tại trường số buổi
           matchesFilter = s.swimSuccessSessions && parseInt(s.swimSuccessSessions) <= 5;
